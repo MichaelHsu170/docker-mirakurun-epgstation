@@ -57,12 +57,12 @@ stream:
             m2ts:
                 - name: 720p
                   cmd:
-                      '%FFMPEG% -re -dual_mono_mode main -i pipe:0 -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2
-                      -c:v libx264 -vf yadif,scale=-2:720 -b:v 3000k -preset veryfast -y -f mpegts pipe:1'
+                      '%FFMPEG% -re -i pipe:0 -map 0:v -map 0:a -map 0:s? -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2
+                      -c:v libx264 -vf yadif,scale=-2:720 -b:v 3000k -preset veryfast -y -f mpegts -c:s mov_text pipe:1'
                 - name: 480p
                   cmd:
-                      '%FFMPEG% -re -dual_mono_mode main -i pipe:0 -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2
-                      -c:v libx264 -vf yadif,scale=-2:480 -b:v 1500k -preset veryfast -y -f mpegts pipe:1'
+                      '%FFMPEG% -re -i pipe:0 -map 0:v -map 0:a -map 0:s? -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2
+                      -c:v libx264 -vf yadif,scale=-2:480 -b:v 1500k -preset veryfast -y -f mpegts -c:s mov_text pipe:1'
                 - name: 無変換
 
             m2tsll:
@@ -94,13 +94,13 @@ stream:
             mp4:
                 - name: 720p
                   cmd:
-                      '%FFMPEG% -re -dual_mono_mode main -i pipe:0 -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2
+                      '%FFMPEG% -re -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2
                       -c:v libx264 -vf yadif,scale=-2:720 -b:v 3000k -profile:v baseline -preset veryfast -tune
                       fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
                       pipe:1'
                 - name: 480p
                   cmd:
-                      '%FFMPEG% -re -dual_mono_mode main -i pipe:0 -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2
+                      '%FFMPEG% -re -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2
                       -c:v libx264 -vf yadif,scale=-2:480 -b:v 1500k -profile:v baseline -preset veryfast -tune
                       fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
                       pipe:1'
@@ -137,13 +137,13 @@ stream:
             mp4:
                 - name: 720p
                   cmd:
-                      '%FFMPEG% -dual_mono_mode main -i pipe:0 -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2 -c:v
+                      '%FFMPEG% -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2 -c:v
                       libx264 -vf yadif,scale=-2:720 -b:v 3000k -profile:v baseline -preset veryfast -tune
                       fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
                       pipe:1'
                 - name: 480p
                   cmd:
-                      '%FFMPEG% -dual_mono_mode main -i pipe:0 -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2 -c:v
+                      '%FFMPEG% -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2 -c:v
                       libx264 -vf yadif,scale=-2:480 -b:v 1500k -profile:v baseline -preset veryfast -tune
                       fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
                       pipe:1'
@@ -180,13 +180,13 @@ stream:
             mp4:
                 - name: 720p
                   cmd:
-                      '%FFMPEG% -dual_mono_mode main -ss %SS% -i %INPUT% -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac
+                      '%FFMPEG% -ss %SS% -i %INPUT% -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac
                       2 -c:v libx264 -vf scale=-2:720 -b:v 3000k -profile:v baseline -preset veryfast -tune
                       fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
                       pipe:1'
                 - name: 480p
                   cmd:
-                      '%FFMPEG% -dual_mono_mode main -ss %SS% -i %INPUT% -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac
+                      '%FFMPEG% -ss %SS% -i %INPUT% -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac
                       2 -c:v libx264 -vf scale=-2:480 -b:v 1500k -profile:v baseline -preset veryfast -tune
                       fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
                       pipe:1'
