@@ -1,7 +1,7 @@
 version: '3.7'
 services:
     mirakurun:
-        image: mh/mirakurun
+        image: mh/mirakurun:3.9.0-rc4
         cap_add:
             - SYS_ADMIN
             - SYS_NICE
@@ -43,9 +43,7 @@ services:
                 max-file: "3"
 
     epgstation:
-        build:
-            context: "./epgstation"
-            dockerfile: "debian.Dockerfile"
+        image: mh/epgstation:2.10.0
         volumes:
             - ./epgstation/config:/app/config
             - ./epgstation/data:/app/data
