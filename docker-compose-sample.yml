@@ -44,6 +44,7 @@ services:
 
     epgstation:
         image: mh/epgstation:2.10.0
+        runtime: nvidia
         volumes:
             - ./epgstation/config:/app/config
             - ./epgstation/data:/app/data
@@ -52,13 +53,15 @@ services:
             - ./recorded:/app/recorded
         environment:
             TZ: "Asia/Tokyo"
+            NVIDIA_VISIBLE_DEVICES: all
+            NVIDIA_DRIVER_CAPABILITIES: all
         depends_on:
             - mirakurun
             - mysql
         ports:
             - "8888:8888"
             - "8889:8889"
-#         user: "1000:1000"
+        user: "1000:1000"
 #         devices:
 #             - /dev/dri:/dev/dri
         restart: always
@@ -66,4 +69,3 @@ services:
 volumes:
     mysql-db:
         driver: local
-

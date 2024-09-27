@@ -57,27 +57,41 @@ stream:
             m2ts:
                 - name: 720p
                   cmd:
-                      '%FFMPEG% -re -i pipe:0 -map 0:v -map 0:a -map 0:s? -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2
-                      -c:v libx264 -vf yadif,scale=-2:720 -b:v 3000k -preset veryfast -y -f mpegts -c:s mov_text pipe:1'
+                      #'%FFMPEG% -re -i pipe:0 -map 0:v -map 0:a -map 0:s? -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2
+                      #-c:v libx264 -vf yadif,scale=-2:720 -b:v 3000k -preset veryfast -y -f mpegts -c:s mov_text pipe:1'
+                      '%FFMPEG% -re -hwaccel cuda -hwaccel_output_format cuda -i pipe:0 -map 0:v -map 0:a -map 0:s? -sn
+                      -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2 -c:v h264_nvenc -vf scale_npp=-2:720 -b:v 3000k -y
+                      -f mpegts -c:s mov_text pipe:1'
                 - name: 480p
                   cmd:
-                      '%FFMPEG% -re -i pipe:0 -map 0:v -map 0:a -map 0:s? -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2
-                      -c:v libx264 -vf yadif,scale=-2:480 -b:v 1500k -preset veryfast -y -f mpegts -c:s mov_text pipe:1'
+                      #'%FFMPEG% -re -i pipe:0 -map 0:v -map 0:a -map 0:s? -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2
+                      #-c:v libx264 -vf yadif,scale=-2:480 -b:v 1500k -preset veryfast -y -f mpegts -c:s mov_text pipe:1'
+                      '%FFMPEG% -re -hwaccel cuda -hwaccel_output_format cuda -i pipe:0 -map 0:v -map 0:a -map 0:s? -sn
+                      -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2 -c:v h264_nvenc -vf scale_npp=-2:480 -b:v 1500k -y
+                      -f mpegts -c:s mov_text pipe:1'
                 - name: 無変換
 
             m2tsll:
                 - name: 720p
                   cmd:
-                      '%FFMPEG% -dual_mono_mode main -f mpegts -analyzeduration 500000 -i pipe:0 -map 0 -c:s copy -c:d
-                      copy -ignore_unknown -fflags nobuffer -flags low_delay -max_delay 250000 -max_interleave_delta 1
-                      -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2 -c:v libx264 -flags +cgop -vf yadif,scale=-2:720
-                      -b:v 3000k -preset veryfast -y -f mpegts pipe:1'
+                      #'%FFMPEG% -dual_mono_mode main -f mpegts -analyzeduration 500000 -i pipe:0 -map 0 -c:s copy -c:d
+                      #copy -ignore_unknown -fflags nobuffer -flags low_delay -max_delay 250000 -max_interleave_delta 1
+                      #-threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2 -c:v libx264 -flags +cgop -vf yadif,scale=-2:720
+                      #-b:v 3000k -preset veryfast -y -f mpegts pipe:1'
+                      '%FFMPEG% -dual_mono_mode main -f mpegts -analyzeduration 500000 -hwaccel cuda
+                      -hwaccel_output_format cuda -i pipe:0 -map 0 -c:s copy -c:d copy -ignore_unknown -fflags nobuffer
+                      -flags low_delay -max_delay 250000 -max_interleave_delta 1 -threads 0 -c:a aac -ar 48000 -b:a 192k
+                      -ac 2 -c:v h264_nvenc -flags +cgop -vf scale_npp=-2:720 -b:v 3000k -y -f mpegts pipe:1'
                 - name: 480p
                   cmd:
-                      '%FFMPEG% -dual_mono_mode main -f mpegts -analyzeduration 500000 -i pipe:0 -map 0 -c:s copy -c:d
-                      copy -ignore_unknown -fflags nobuffer -flags low_delay -max_delay 250000 -max_interleave_delta 1
-                      -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2 -c:v libx264 -flags +cgop -vf yadif,scale=-2:480
-                      -b:v 1500k -preset veryfast -y -f mpegts pipe:1'
+                      #'%FFMPEG% -dual_mono_mode main -f mpegts -analyzeduration 500000 -i pipe:0 -map 0 -c:s copy -c:d
+                      #copy -ignore_unknown -fflags nobuffer -flags low_delay -max_delay 250000 -max_interleave_delta 1
+                      #-threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2 -c:v libx264 -flags +cgop -vf yadif,scale=-2:480
+                      #-b:v 1500k -preset veryfast -y -f mpegts pipe:1'
+                      '%FFMPEG% -dual_mono_mode main -f mpegts -analyzeduration 500000 -hwaccel cuda
+                      -hwaccel_output_format cuda -i pipe:0 -map 0 -c:s copy -c:d copy -ignore_unknown -fflags nobuffer
+                      -flags low_delay -max_delay 250000 -max_interleave_delta 1 -threads 0 -c:a aac -ar 48000 -b:a 128k
+                      -ac 2 -c:v h264_nvenc -flags +cgop -vf scale_npp=-2:480 -b:v 1500k -y -f mpegts pipe:1'
 
             webm:
                 - name: 720p
@@ -94,16 +108,22 @@ stream:
             mp4:
                 - name: 720p
                   cmd:
-                      '%FFMPEG% -re -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2
-                      -c:v libx264 -vf yadif,scale=-2:720 -b:v 3000k -profile:v baseline -preset veryfast -tune
-                      fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
-                      pipe:1'
+                      #'%FFMPEG% -re -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2
+                      #-c:v libx264 -vf yadif,scale=-2:720 -b:v 3000k -profile:v baseline -preset veryfast -tune
+                      #fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
+                      #pipe:1'
+                      '%FFMPEG% -re -hwaccel cuda -hwaccel_output_format cuda -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0
+                      -c:a aac -ar 48000 -b:a 192k -ac 2 -c:v h264_nvenc -vf scale_npp=-2:720 -b:v 3000k -profile:v baseline
+                      -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4 pipe:1'
                 - name: 480p
                   cmd:
-                      '%FFMPEG% -re -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2
-                      -c:v libx264 -vf yadif,scale=-2:480 -b:v 1500k -profile:v baseline -preset veryfast -tune
-                      fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
-                      pipe:1'
+                      #'%FFMPEG% -re -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2
+                      #-c:v libx264 -vf yadif,scale=-2:480 -b:v 1500k -profile:v baseline -preset veryfast -tune
+                      #fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
+                      #pipe:1'
+                      '%FFMPEG% -re -hwaccel cuda -hwaccel_output_format cuda -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0
+                      -c:a aac -ar 48000 -b:a 128k -ac 2 -c:v h264_nvenc -vf scale_npp=-2:480 -b:v 1500k -profile:v baseline
+                      -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4 pipe:1'
 
             hls:
                 - name: 720p
@@ -137,16 +157,22 @@ stream:
             mp4:
                 - name: 720p
                   cmd:
-                      '%FFMPEG% -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2 -c:v
-                      libx264 -vf yadif,scale=-2:720 -b:v 3000k -profile:v baseline -preset veryfast -tune
-                      fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
-                      pipe:1'
+                      #'%FFMPEG% -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2 -c:v
+                      #libx264 -vf yadif,scale=-2:720 -b:v 3000k -profile:v baseline -preset veryfast -tune
+                      #fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
+                      #pipe:1'
+                      '%FFMPEG% -hwaccel cuda -hwaccel_output_format cuda -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0
+                      -c:a aac -ar 48000 -b:a 192k -ac 2 -c:v h264_nvenc -vf scale_npp=-2:720 -b:v 3000k -profile:v baseline
+                      -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4 pipe:1'
                 - name: 480p
                   cmd:
-                      '%FFMPEG% -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2 -c:v
-                      libx264 -vf yadif,scale=-2:480 -b:v 1500k -profile:v baseline -preset veryfast -tune
-                      fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
-                      pipe:1'
+                      #'%FFMPEG% -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2 -c:v
+                      #libx264 -vf yadif,scale=-2:480 -b:v 1500k -profile:v baseline -preset veryfast -tune
+                      #fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
+                      #pipe:1'
+                      '%FFMPEG% -hwaccel cuda -hwaccel_output_format cuda -i pipe:0 -map 0:v:0 -map 0:a:1 -sn -threads 0
+                      -c:a aac -ar 48000 -b:a 128k -ac 2 -c:v h264_nvenc -vf scale_npp=-2:480 -b:v 1500k -profile:v baseline
+                      -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4 pipe:1'
 
             hls:
                 - name: 720p
@@ -180,16 +206,22 @@ stream:
             mp4:
                 - name: 720p
                   cmd:
-                      '%FFMPEG% -ss %SS% -i %INPUT% -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac
-                      2 -c:v libx264 -vf scale=-2:720 -b:v 3000k -profile:v baseline -preset veryfast -tune
-                      fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
-                      pipe:1'
+                      #'%FFMPEG% -ss %SS% -i %INPUT% -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 192k -ac
+                      #2 -c:v libx264 -vf scale=-2:720 -b:v 3000k -profile:v baseline -preset veryfast -tune
+                      #fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
+                      #pipe:1'
+                      '%FFMPEG% -ss %SS% -hwaccel cuda -hwaccel_output_format cuda -i %INPUT% -map 0:v:0 -map 0:a:1 -sn
+                      -threads 0 -c:a aac -ar 48000 -b:a 192k -ac 2 -c:v h264_nvenc -vf scale_npp=-2:720 -b:v 3000k
+                      -profile:v baseline -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4 pipe:1'
                 - name: 480p
                   cmd:
-                      '%FFMPEG% -ss %SS% -i %INPUT% -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac
-                      2 -c:v libx264 -vf scale=-2:480 -b:v 1500k -profile:v baseline -preset veryfast -tune
-                      fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
-                      pipe:1'
+                      #'%FFMPEG% -ss %SS% -i %INPUT% -map 0:v:0 -map 0:a:1 -sn -threads 0 -c:a aac -ar 48000 -b:a 128k -ac
+                      #2 -c:v libx264 -vf scale=-2:480 -b:v 1500k -profile:v baseline -preset veryfast -tune
+                      #fastdecode,zerolatency -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4
+                      #pipe:1'
+                      '%FFMPEG% -ss %SS% -hwaccel cuda -hwaccel_output_format cuda -i %INPUT% -map 0:v:0 -map 0:a:1 -sn
+                      -threads 0 -c:a aac -ar 48000 -b:a 128k -ac 2 -c:v h264_nvenc -vf scale_npp=-2:480 -b:v 1500k
+                      -profile:v baseline -movflags frag_keyframe+empty_moov+faststart+default_base_moof -y -f mp4 pipe:1'
 
             hls:
                 - name: 720p
