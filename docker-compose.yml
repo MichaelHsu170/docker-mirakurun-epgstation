@@ -51,7 +51,7 @@ services:
 
   epgstation:
     image: mh/epgstation:2.10.0
-#    runtime: nvidia
+    runtime: nvidia
     volumes:
       - ./epgstation/config:/app/config
       - ./epgstation/data:/app/data
@@ -60,8 +60,8 @@ services:
       - /home/michaelhsu/Storage/tv_live/recorded:/app/recorded
     environment:
       TZ: "Asia/Tokyo"
-#      NVIDIA_VISIBLE_DEVICES: all
-#      NVIDIA_DRIVER_CAPABILITIES: all
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
     depends_on:
       - mirakurun
       - mysql
