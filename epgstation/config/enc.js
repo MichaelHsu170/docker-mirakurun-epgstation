@@ -81,6 +81,11 @@ Array.prototype.push.apply(args, [output]);
         let strbyline = String(data).split('\n');
         for (let i = 0; i < strbyline.length; i++) {
             let str = strbyline[i];
+            if (!str.startsWith('frame')) {
+                // non-progress line (version info, errors, stream mapping etc.) — forward to stderr
+                if (str !== '') process.stderr.write(str + '\n');
+                continue;
+            }
             if (str.startsWith('frame')) {
                 // 想定log
                 // frame= 5159 fps= 11 q=29.0 size=  122624kB time=00:02:51.84 bitrate=5845.8kbits/s dup=19 drop=0 speed=0.372x
@@ -117,7 +122,6 @@ Array.prototype.push.apply(args, [output]);
                  */
 
                 if (ffmatch === null) {
-                    // non-progress stderr line — forward to enc.js stderr so EPGStation logs it as debug
                     process.stderr.write(str + '\n');
                     continue;
                 }
