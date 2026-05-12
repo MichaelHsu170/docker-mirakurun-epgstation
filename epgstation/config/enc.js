@@ -70,6 +70,7 @@ Array.prototype.push.apply(args, [output]);
     const duration = await getDuration(input);
 
     const child = spawn(ffmpeg, args);
+    process.stderr.write('ffmpeg command: ' + ffmpeg + ' ' + args.join(' ') + '\n');
 
     /**
      * エンコード進捗表示用に標準出力に進捗情報を吐き出す
@@ -115,7 +116,11 @@ Array.prototype.push.apply(args, [output]);
                  * ]
                  */
 
-                if (ffmatch === null) continue;
+                if (ffmatch === null) {
+                    // non-progress stderr line — forward to enc.js stderr so EPGStation logs it as debug
+                    process.stderr.write(str + '\n');
+                    continue;
+                }
 
                 progress['frame'] = parseInt(ffmatch.groups.frame);
                 progress['fps'] = parseFloat(ffmatch.groups.fps);
