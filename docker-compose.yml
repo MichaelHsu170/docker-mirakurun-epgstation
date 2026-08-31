@@ -33,7 +33,7 @@ services:
   mysql:
     image: mariadb:10.5
     volumes:
-      - mysql-db:/var/lib/mysql
+      - ./mysql/data:/var/lib/mysql
     environment:
       MYSQL_USER: epgstation
       MYSQL_PASSWORD: epgstation
@@ -74,10 +74,6 @@ services:
     restart: always
     networks:
       - dlan
-
-volumes:
-  mysql-db:
-    driver: local
 
 networks:
   dlan:
