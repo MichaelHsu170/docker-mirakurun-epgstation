@@ -8,6 +8,10 @@ const output = process.env.OUTPUT;
 const isDualMono = parseInt(process.env.AUDIOCOMPONENTTYPE, 10) == 2;
 const args = ['-y'];
 
+// GPU (NVENC/CUDA) と CPU (libx264) を切り替えるフラグ
+// config.yml の encode.cmd に渡す引数 (gpu/cpu) で指定する。省略時は gpu。
+const USE_GPU = process.argv[2] !== 'cpu';
+
 /**
  * 動画長取得関数
  * @param {string} filePath ファイルパス
@@ -35,14 +39,15 @@ const getDuration = filePath => {
 // 字幕用
 Array.prototype.push.apply(args, ['-fix_sub_duration']);
 // NVidia GPU
-Array.prototype.push.apply(args, ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda']);
+if (USE_GPU) {
+    Array.prototype.push.apply(args, ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda']);
+}
 // input 設定
 Array.prototype.push.apply(args, ['-i', input]);
 // ビデオストリーム設定
-//Array.prototype.push.apply(args, ['-map', '0:v', '-c:v', 'libx264']);
-Array.prototype.push.apply(args, ['-map', '0:v', '-c:v', 'h264_nvenc']);
+Array.prototype.push.apply(args, ['-map', '0:v', '-c:v', USE_GPU ? 'h264_nvenc' : 'libx264']);
 // インターレス解除
-//Array.prototype.push.apply(args, ['-vf', 'yadif']);
+Array.prototype.push.apply(args, ['-vf', USE_GPU ? 'yadif_cuda' : 'yadif']);
 // オーディオストリーム設定
 if (isDualMono) {
     Array.prototype.push.apply(args, [
@@ -60,8 +65,10 @@ if (isDualMono) {
 Array.prototype.push.apply(args, ['-c:a', 'aac']);
 // 字幕ストリーム設定
 Array.prototype.push.apply(args, ['-map', '0:s?', '-c:s', 'srt']);
-// 品質設定
-//Array.prototype.push.apply(args, ['-preset', 'veryfast', '-crf', '26']);
+// 品質設定 (libx264のみ、h264_nvencでは-crfが無効なため)
+if (!USE_GPU) {
+    Array.prototype.push.apply(args, ['-preset', 'veryfast', '-crf', '26']);
+}
 // 出力ファイル
 Array.prototype.push.apply(args, [output]);
 
