@@ -1,6 +1,9 @@
 services:
   mirakurun:
-    image: mh/mirakurun:4.1.3
+    image: mh/mirakurun:${MIRAKURUN_VERSION:?run launch.sh build first (no .env found)}
+    build:
+      context: ../srcs/Mirakurun
+      dockerfile: docker/Dockerfile
     cap_add:
       - SYS_ADMIN
       - SYS_NICE
@@ -49,7 +52,10 @@ services:
       - dlan
 
   epgstation:
-    image: mh/epgstation:2.10.0
+    image: mh/epgstation:${EPGSTATION_VERSION:?run launch.sh build first (no .env found)}
+    build:
+      context: ../srcs/EPGStation
+      dockerfile: docker/Dockerfile
     runtime: nvidia
     volumes:
       - ./epgstation/config:/app/config
@@ -71,6 +77,23 @@ services:
 #     devices:
 #       - /dev/dri:/dev/dri
     restart: always
+    networks:
+      - dlan
+
+  # Rotation/retention for EPGStation's Service/Operator/EPGUpdater logs - see
+  # logrotate.d/tv_live.logrotate for the policy. log4js's own maxLogSize/backups rotation
+  # is disabled in the *LogConfig.yml files in favor of this central policy.
+  logrotate:
+    build: ../../logrotate
+    image: logrotate-sidecar:latest
+    container_name: tv-live-logrotate
+    environment:
+      - TZ=Asia/Tokyo
+    restart: always
+    volumes:
+      - ./epgstation/logs:/app/logs
+      - ./logrotate.d:/etc/logrotate-src:ro
+      - ./epgstation/logs/.logrotate-state:/var/lib/logrotate
     networks:
       - dlan
 

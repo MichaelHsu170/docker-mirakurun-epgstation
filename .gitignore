@@ -3,6 +3,7 @@
 *.log.*
 *.log-*
 .DS_Store
+/.env
 /recorded/*
 /mirakurun/data/*
 /mirakurun/conf/*
@@ -24,4 +25,5 @@
 !/epgstation/config/epgUpdaterLogConfig.sample.yml
 !/epgstation/config/serviceLogConfig.sample.yml
 /epgstation/data/*.json
+/epgstation/logs/.logrotate-state/
 !.gitkeep

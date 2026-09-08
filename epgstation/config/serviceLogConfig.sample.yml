@@ -1,31 +1,35 @@
-appenders: 
-  system: 
+appenders:
+  # maxLogSize/backups are commented out below on every file appender: rotation and
+  # retention for EPGStation's logs are now handled centrally by the repo's logrotate
+  # sidecar container (bind-mounts this logs/ dir), not by log4js. Leaving these active
+  # would race with the sidecar copytruncating the same files.
+  system:
     type: file
-    maxLogSize: 1048576
-    backups: 3
+    # maxLogSize: 1048576
+    # backups: 3
     filename: "%ServiceSystem%"
     pattern: "yyyy-MM-dd"
-  access: 
+  access:
     type: file
-    maxLogSize: 1048576
-    backups: 3
+    # maxLogSize: 1048576
+    # backups: 3
     filename: "%ServiceAccess%"
     pattern: "yyyy-MM-dd"
-  stream: 
+  stream:
     type: file
-    maxLogSize: 1048576
-    backups: 3
+    # maxLogSize: 1048576
+    # backups: 3
     filename: "%ServiceStream%"
     pattern: "yyyy-MM-dd"
-  encode: 
+  encode:
     type: file
-    maxLogSize: 1048576
-    backups: 3
+    # maxLogSize: 1048576
+    # backups: 3
     filename: "%ServiceEncode%"
     pattern: "yyyy-MM-dd"
-  console: 
+  console:
     type: console
-  stdout: 
+  stdout:
     type: stdout
 categories: 
   default: 

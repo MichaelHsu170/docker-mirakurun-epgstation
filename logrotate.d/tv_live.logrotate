@@ -1,0 +1,23 @@
+# Policy for the tv_live logrotate sidecar (see docker-compose.yml's `logrotate`
+# service). Covers EPGStation's Service/Operator/EPGUpdater log4js file appenders,
+# which had their own maxLogSize/backups rotation disabled in the *LogConfig.yml
+# files in favor of this central policy.
+#
+# su root root: the sidecar container already runs as root, so this isn't
+# about dropping privilege - it's logrotate's own documented way to bypass its
+# "parent directory is group-writable" safety check, for consistency with the
+# other two projects' policies even where it isn't currently triggered here.
+su root root
+
+/app/logs/Service/*.log
+/app/logs/Operator/*.log
+/app/logs/EPGUpdater/*.log
+{
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
