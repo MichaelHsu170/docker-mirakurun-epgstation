@@ -1,12 +1,11 @@
 const spawn = require('child_process').spawn;
 const execFile = require('child_process').execFile;
+const { audioTrackPlan } = require('./lib/audioTrackPlan.js');
 const ffmpeg = process.env.FFMPEG;
 const ffprobe = process.env.FFPROBE;
 
 const input = process.env.INPUT;
 const output = process.env.OUTPUT;
-const isDualMono = parseInt(process.env.AUDIOCOMPONENTTYPE, 10) == 2;
-const args = ['-y'];
 
 // GPU (NVENC/CUDA) と CPU (libx264) を切り替えるフラグ
 // config.yml の encode.cmd に渡す引数 (gpu/cpu) で指定する。省略時は gpu。
@@ -36,45 +35,46 @@ const getDuration = filePath => {
     });
 };
 
-// 字幕用
-Array.prototype.push.apply(args, ['-fix_sub_duration']);
-// NVidia GPU
-if (USE_GPU) {
-    Array.prototype.push.apply(args, ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda']);
-}
-// input 設定
-Array.prototype.push.apply(args, ['-i', input]);
-// ビデオストリーム設定
-Array.prototype.push.apply(args, ['-map', '0:v', '-c:v', USE_GPU ? 'h264_nvenc' : 'libx264']);
-// インターレス解除
-Array.prototype.push.apply(args, ['-vf', USE_GPU ? 'yadif_cuda' : 'yadif']);
-// オーディオストリーム設定
-if (isDualMono) {
-    Array.prototype.push.apply(args, [
-        '-filter_complex',
-        'channelsplit[FL][FR]',
-        '-map', '[FL]',
-        '-map', '[FR]',
-        '-metadata:s:a:0', 'language=jpn',
-        '-metadata:s:a:1', 'language=eng',
-        '-ac', '1',
-    ]);
-} else {
-    Array.prototype.push.apply(args, ['-map', '0:a']);
-}
-Array.prototype.push.apply(args, ['-c:a', 'aac']);
-// 字幕ストリーム設定
-Array.prototype.push.apply(args, ['-map', '0:s?', '-c:s', 'srt']);
-// 品質設定 (libx264のみ、h264_nvencでは-crfが無効なため)
-if (!USE_GPU) {
-    Array.prototype.push.apply(args, ['-preset', 'veryfast', '-crf', '26']);
-}
-// 出力ファイル
-Array.prototype.push.apply(args, [output]);
-
 (async () => {
     // 進捗計算のために動画の長さを取得
     const duration = await getDuration(input);
+    // 音声ストリーム構成 (実ストリーム数・二カ国語判定) を実際にデコードして判定する。
+    // EPG由来のメタデータ (AUDIOCOMPONENTTYPE) は誤りや欠落があり得るため信頼しない。
+    const plan = await audioTrackPlan(ffprobe, ffmpeg, input);
+
+    const args = ['-y'];
+    // 字幕用
+    Array.prototype.push.apply(args, ['-fix_sub_duration']);
+    // NVidia GPU
+    if (USE_GPU) {
+        Array.prototype.push.apply(args, ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda']);
+    }
+    // input 設定
+    Array.prototype.push.apply(args, ['-i', input]);
+    // 音声ストリーム分割 (二カ国語放送の場合のみ channelsplit を適用)
+    if (plan.filterComplex) {
+        Array.prototype.push.apply(args, ['-filter_complex', plan.filterComplex]);
+    }
+    // ビデオストリーム設定
+    Array.prototype.push.apply(args, ['-map', '0:v', '-c:v', USE_GPU ? 'h264_nvenc' : 'libx264']);
+    // インターレス解除
+    Array.prototype.push.apply(args, ['-vf', USE_GPU ? 'yadif_cuda' : 'yadif']);
+    // オーディオストリーム設定
+    Array.prototype.push.apply(args, plan.audioMapArgs);
+    if (plan.trackCount > 0) {
+        Array.prototype.push.apply(args, ['-c:a', 'aac']);
+        if (plan.filterComplex) {
+            Array.prototype.push.apply(args, ['-metadata:s:a:0', 'language=jpn', '-metadata:s:a:1', 'language=eng']);
+        }
+    }
+    // 字幕ストリーム設定
+    Array.prototype.push.apply(args, ['-map', '0:s?', '-c:s', 'srt']);
+    // 品質設定 (libx264のみ、h264_nvencでは-crfが無効なため)
+    if (!USE_GPU) {
+        Array.prototype.push.apply(args, ['-preset', 'veryfast', '-crf', '26']);
+    }
+    // 出力ファイル
+    Array.prototype.push.apply(args, [output]);
 
     const child = spawn(ffmpeg, args);
     process.stderr.write('ffmpeg command: ' + ffmpeg + ' ' + args.join(' ') + '\n');
@@ -190,4 +190,9 @@ Array.prototype.push.apply(args, [output]);
     process.on('SIGINT', () => {
         child.kill('SIGINT');
     });
-})();
+})().catch(err => {
+    // getDuration/audioTrackPlan が reject した場合 (ffprobe/ffmpeg 起動失敗など) に
+    // 未処理のまま落ちると原因が分かりにくいため、明示的にログしてから終了する。
+    console.error('enc.js: fatal error:', err);
+    process.exitCode = 1;
+});

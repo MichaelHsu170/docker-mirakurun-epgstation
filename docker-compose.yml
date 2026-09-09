@@ -56,9 +56,12 @@ services:
     build:
       context: ../srcs/EPGStation
       dockerfile: docker/Dockerfile
+      additional_contexts:
+        ffmpegsrc: ../srcs/ffmpeg
     runtime: nvidia
     volumes:
       - ./epgstation/config:/app/config
+      - ./epgstation/scripts:/app/scripts
       - ./epgstation/data:/app/data
       - ./epgstation/thumbnail:/app/thumbnail
       - ./epgstation/logs:/app/logs

@@ -1,32 +1,37 @@
 appenders:
-  # maxLogSize/backups are commented out below on every file appender: rotation and
-  # retention for EPGStation's logs are now handled centrally by the repo's logrotate
-  # sidecar container (bind-mounts this logs/ dir), not by log4js. Leaving these active
-  # would race with the sidecar copytruncating the same files.
+  # maxLogSize/backups/pattern are commented out below on every file appender:
+  # rotation and retention for EPGStation's logs are now handled centrally by
+  # the repo's logrotate sidecar container (bind-mounts this logs/ dir), not by
+  # log4js. Leaving maxLogSize/backups active would race with the sidecar
+  # copytruncating the same files - and pattern turned out not to be inert on
+  # its own: log4js's file appender uses it to switch to a new dated filename
+  # at each day boundary independent of maxLogSize/backups, so a dated file
+  # (e.g. access.log.2026-09-08) kept reappearing daily even with those two
+  # commented out, until this was caught and disabled too.
   system:
     type: file
     # maxLogSize: 1048576
     # backups: 3
     filename: "%OperatorSystem%"
-    pattern: "yyyy-MM-dd"
+    # pattern: "yyyy-MM-dd"
   access:
     type: file
     # maxLogSize: 1048576
     # backups: 3
     filename: "%OperatorAccess%"
-    pattern: "yyyy-MM-dd"
+    # pattern: "yyyy-MM-dd"
   stream:
     type: file
     # maxLogSize: 1048576
     # backups: 3
     filename: "%OperatorStream%"
-    pattern: "yyyy-MM-dd"
+    # pattern: "yyyy-MM-dd"
   encode:
     type: file
     # maxLogSize: 1048576
     # backups: 3
     filename: "%OperatorEncode%"
-    pattern: "yyyy-MM-dd"
+    # pattern: "yyyy-MM-dd"
   console:
     type: console
   stdout:
