@@ -87,8 +87,8 @@ services:
   # logrotate.d/tv_live.logrotate for the policy. log4js's own maxLogSize/backups rotation
   # is disabled in the *LogConfig.yml files in favor of this central policy.
   logrotate:
-    build: ../../logrotate
-    image: logrotate-sidecar:latest
+    image: logrotate-sidecar:latest   # built by ../../logrotate/launch.sh, not here
+    pull_policy: never
     container_name: tv-live-logrotate
     environment:
       - TZ=Asia/Tokyo
