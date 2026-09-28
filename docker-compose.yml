@@ -33,7 +33,9 @@ services:
       - dlan
 
   mysql:
-    image: mariadb:10.5
+    # MariaDB LTS (12.3: supported until 2029). A new major version upgrades the data files on
+    # its first start (MARIADB_AUTO_UPGRADE); back up mysql/data first.
+    image: mariadb:12.3
     volumes:
       - ./mysql/data:/var/lib/mysql
     environment:
@@ -41,6 +43,7 @@ services:
       MYSQL_PASSWORD: epgstation
       MYSQL_ROOT_PASSWORD: epgstation
       MYSQL_DATABASE: epgstation
+      MARIADB_AUTO_UPGRADE: "1"
       TZ: "Asia/Tokyo"
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --performance-schema=false --expire_logs_days=1
     restart: always
