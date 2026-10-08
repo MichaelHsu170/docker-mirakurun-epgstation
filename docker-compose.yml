@@ -69,6 +69,7 @@ services:
       - ./epgstation/scripts:/app/scripts
       - ./epgstation/data:/app/data
       - ./epgstation/thumbnail:/app/thumbnail
+      - ./epgstation/drop:/app/drop   # drop check logs (isEnabledDropCheck), one per recording
       - ./epgstation/logs:/app/logs
       - /home/michaelhsu/Storage/tv_live/recorded:/app/recorded
     environment:

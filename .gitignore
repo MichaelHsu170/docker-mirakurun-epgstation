@@ -10,6 +10,8 @@
 /mysql/data/*
 /epgstation/custom.Dockerfile
 /epgstation/thumbnail/*.jpg
+/epgstation/drop/*
+!/epgstation/drop/.gitkeep
 /epgstation/data/streamfiles/*.ts
 /epgstation/data/streamfiles/*.m3u8
 /epgstation/config/*

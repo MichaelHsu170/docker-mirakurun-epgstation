@@ -20,6 +20,9 @@ epgUpdateIntervalTime: 10
 conflictPriority: 1
 recPriority: 2
 
+# 録画中に TS のドロップ・エラー・スクランブルを検査し、録画ごとにログ (時刻付き) を drop/ に残す
+isEnabledDropCheck: true
+
 recordedFormat: '%YEAR%年%MONTH%月%DAY%日%HOUR%時%MIN%分%SEC%秒-%CHNAME%-%TITLE%'
 recordedFileExtension: .m2ts
 recorded:
