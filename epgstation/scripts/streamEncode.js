@@ -121,11 +121,11 @@ const PROFILES = {
  * 早期チェックに失敗した場合は、従来通り PROBE_MAX_MS/BYTES まで継続する
  * (dual-mono のdecode-compare判定にはこの長さのサンプルが必要)。
  * @param {string} ffprobePath
+ * @param {string} tempFile バッファの書き出し先
  * @return {Promise<{tempFile: string, tailChunks: Buffer[], cleanup: Function}>}
  */
-function bufferProbeWindow(ffprobePath) {
+function bufferProbeWindow(ffprobePath, tempFile) {
     return new Promise((resolve, reject) => {
-        const tempFile = path.join(os.tmpdir(), `streamEncode-${process.pid}-${Date.now()}.ts`);
         const out = fs.createWriteStream(tempFile);
         let bytes = 0;
         let flushedBytes = 0;
@@ -204,11 +204,12 @@ function bufferProbeWindow(ffprobePath) {
         return;
     }
 
-    const { tempFile, tailChunks, cleanup } = await bufferProbeWindow(ffprobe);
     // EPGStation はストリーム停止時にこのプロセスへ直接 SIGTERM を送ることが多く、
     // child.on('close') や stdin の 'end' を経由しない経路で終了する。
     // 'exit' はプロセス終了直前に必ず (SIGKILL以外では) 発火するため、
-    // 一時ファイルの掃除はここに一本化する。
+    // 一時ファイルの掃除はここに一本化する。バッファ作成前に登録しないと、
+    // バッファ中 (数秒間) に停止された場合に一時ファイルが残る
+    const tempFile = path.join(os.tmpdir(), `streamEncode-${process.pid}-${Date.now()}.ts`);
     process.on('exit', () => {
         try {
             fs.unlinkSync(tempFile);
@@ -216,6 +217,13 @@ function bufferProbeWindow(ffprobePath) {
             // すでに削除済み、または書き込み中断などは無視してよい
         }
     });
+    // シグナルによる終了では 'exit' が発火しないため、ffmpeg へ転送するハンドラを
+    // 登録するまでは通常終了に変えて上の掃除を実行させる
+    const exitOnSignal = () => process.exit(1);
+    process.on('SIGINT', exitOnSignal);
+    process.on('SIGTERM', exitOnSignal);
+
+    const { tailChunks, cleanup } = await bufferProbeWindow(ffprobe, tempFile);
 
     let plan;
     try {
@@ -287,6 +295,8 @@ function bufferProbeWindow(ffprobePath) {
         process.exitCode = code;
     });
 
+    process.removeListener('SIGINT', exitOnSignal);
+    process.removeListener('SIGTERM', exitOnSignal);
     process.on('SIGINT', () => child.kill('SIGINT'));
     process.on('SIGTERM', () => child.kill('SIGTERM'));
 })().catch(err => {
