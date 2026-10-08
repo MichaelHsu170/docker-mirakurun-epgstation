@@ -11,6 +11,9 @@ const output = process.env.OUTPUT;
 // config.yml の encode.cmd に渡す引数 (gpu/cpu) で指定する。省略時は gpu。
 const USE_GPU = process.argv[2] !== 'cpu';
 
+// 出力の長さがこの割合未満ならエンコード失敗とする (正常なエンコードは入力の 98〜100%)
+const MIN_DURATION_RATIO = 0.97;
+
 /**
  * 動画長取得関数
  * @param {string} filePath ファイルパス
@@ -77,6 +80,17 @@ const getDuration = filePath => {
     Array.prototype.push.apply(args, [output]);
 
     const child = spawn(ffmpeg, args);
+
+    // キャンセル時、EPGStation は先に stdout/stderr を閉じてから SIGINT を送る。閉じたパイプへの
+    // 書き込みエラー (EPIPE) で enc.js が先に落ちると SIGINT を ffmpeg に転送できず、ffmpeg が
+    // 終了せずに残るため、書き込みエラーは無視して enc.js が終了するときは ffmpeg も止める
+    process.stdout.on('error', () => {});
+    process.stderr.on('error', () => {});
+    process.on('exit', () => {
+        if (child.exitCode === null && child.signalCode === null) {
+            child.kill('SIGINT');
+        }
+    });
     process.stderr.write('ffmpeg command: ' + ffmpeg + ' ' + args.join(' ') + '\n');
 
     /**
@@ -96,8 +110,9 @@ const getDuration = filePath => {
             if (str.startsWith('frame')) {
                 // 想定log
                 // frame= 5159 fps= 11 q=29.0 size=  122624kB time=00:02:51.84 bitrate=5845.8kbits/s dup=19 drop=0 speed=0.372x
+                // srcs/ffmpeg (ffmpeg 9) ではサイズの単位が KiB (size=  122624KiB)
                 const progress = {};
-                const ffmpeg_reg = /frame=\s*(?<frame>\d+)\sfps=\s*(?<fps>\d+(?:\.\d+)?)\sq=\s*(?<q>[+-]?\d+(?:\.\d+)?)\sL?size=\s*(?<size>\d+(?:\.\d+)?)kB\stime=\s*(?<time>\d+[:\.\d+]*)\sbitrate=\s*(?<bitrate>\d+(?:\.\d+)?)kbits\/s(?:\sdup=\s*(?<dup>\d+))?(?:\sdrop=\s*(?<drop>\d+))?\sspeed=\s*(?<speed>\d+(?:\.\d+)?)x/;
+                const ffmpeg_reg = /frame=\s*(?<frame>\d+)\sfps=\s*(?<fps>\d+(?:\.\d+)?)\sq=\s*(?<q>[+-]?\d+(?:\.\d+)?)\sL?size=\s*(?<size>\d+(?:\.\d+)?)(?:kB|KiB)\stime=\s*(?<time>\d+[:\.\d+]*)\sbitrate=\s*(?<bitrate>\d+(?:\.\d+)?)kbits\/s(?:\sdup=\s*(?<dup>\d+))?(?:\sdrop=\s*(?<drop>\d+))?\sspeed=\s*(?<speed>\d+(?:\.\d+)?)x/;
                 let ffmatch =str.match(ffmpeg_reg);
                 /**
                  * match結果
@@ -183,8 +198,27 @@ const getDuration = filePath => {
         throw new Error(err);
     });
 
-    child.on('close', (code) => {
-        process.exitCode = code;
+    // シグナルで終了した場合 code は null になる。そのまま exitCode に渡すと 0 (成功) 扱いになり、
+    // EPGStation が途中までのファイルを登録して元ファイルを削除してしまうため失敗として返す
+    child.on('close', async (code) => {
+        process.exitCode = code === null ? 1 : code;
+        if (process.exitCode !== 0) {
+            return;
+        }
+
+        // ffmpeg が正常終了しても入力の欠落部分を詰めて短い動画を出力することがある。
+        // 成功扱いにすると元ファイルが削除されて欠落部分が失われるため、出力が入力より
+        // MIN_DURATION_RATIO 未満の長さなら失敗として返す
+        try {
+            const outputDuration = await getDuration(output);
+            if (!(outputDuration >= duration * MIN_DURATION_RATIO)) {
+                console.error(`enc.js: output is ${outputDuration}s, input is ${duration}s: treating the encode as failed`);
+                process.exitCode = 1;
+            }
+        } catch (err) {
+            console.error('enc.js: cannot read the output duration:', err);
+            process.exitCode = 1;
+        }
     });
 
     process.on('SIGINT', () => {
