@@ -1,6 +1,7 @@
 services:
   mirakurun:
     image: mh/mirakurun:${MIRAKURUN_VERSION:?run launch.sh build first (no .env found)}
+    pull_policy: never   # built by launch.sh build; never fetch a Docker Hub image of the same name
     build:
       context: ../srcs/Mirakurun
       dockerfile: docker/Dockerfile
@@ -56,6 +57,7 @@ services:
 
   epgstation:
     image: mh/epgstation:${EPGSTATION_VERSION:?run launch.sh build first (no .env found)}
+    pull_policy: never   # built by launch.sh build; never fetch a Docker Hub image of the same name
     build:
       context: ../srcs/EPGStation
       dockerfile: docker/Dockerfile
@@ -83,6 +85,10 @@ services:
 #     devices:
 #       - /dev/dri:/dev/dri
     restart: always
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - dlan
 
