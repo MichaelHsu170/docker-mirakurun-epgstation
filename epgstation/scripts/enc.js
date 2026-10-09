@@ -11,8 +11,9 @@ const output = process.env.OUTPUT;
 // config.yml の encode.cmd に渡す引数 (gpu/cpu) で指定する。省略時は gpu。
 const USE_GPU = process.argv[2] !== 'cpu';
 
-// 出力の長さがこの割合未満ならエンコード失敗とする (正常なエンコードは入力の 98〜100%)
-const MIN_DURATION_RATIO = 0.97;
+// 出力が入力よりこの秒数を超えて短ければエンコード失敗とする (正常なエンコードでも先頭のキーフレーム
+// までの分などで数秒は短くなるため、割合ではなく秒数で判定する)
+const MAX_MISSING_SECONDS = 5;
 
 /**
  * 動画長取得関数
@@ -98,8 +99,12 @@ const getDuration = filePath => {
      * 出力する JSON
      * {"type":"progress","percent": 0.8, "log": "view log" }
      */
+    // ffmpeg は進捗行を \r で終え、エラーなどは \n で終える。チャンクの境界は行の途中にもなるため、
+    // 最後の不完全な行は次のチャンクと合わせて処理する
+    let stderrRest = '';
     child.stderr.on('data', data => {
-        let strbyline = String(data).split('\n');
+        let strbyline = (stderrRest + String(data)).split(/[\r\n]+/);
+        stderrRest = strbyline.pop();
         for (let i = 0; i < strbyline.length; i++) {
             let str = strbyline[i];
             if (!str.startsWith('frame')) {
@@ -193,6 +198,10 @@ const getDuration = filePath => {
         }
     });
 
+    child.stderr.on('end', () => {
+        if (stderrRest !== '') process.stderr.write(stderrRest + '\n');
+    });
+
     child.on('error', err => {
         console.error(err);
         throw new Error(err);
@@ -208,10 +217,14 @@ const getDuration = filePath => {
 
         // ffmpeg が正常終了しても入力の欠落部分を詰めて短い動画を出力することがある。
         // 成功扱いにすると元ファイルが削除されて欠落部分が失われるため、出力が入力より
-        // MIN_DURATION_RATIO 未満の長さなら失敗として返す
+        // MAX_MISSING_SECONDS 秒を超えて短ければ失敗として返す。入力の長さが分からない場合は判定しない
+        if (!Number.isFinite(duration) || duration <= 0) {
+            console.error(`enc.js: input duration is unknown (${duration}): not checking the output duration`);
+            return;
+        }
         try {
             const outputDuration = await getDuration(output);
-            if (!(outputDuration >= duration * MIN_DURATION_RATIO)) {
+            if (!(outputDuration >= duration - MAX_MISSING_SECONDS)) {
                 console.error(`enc.js: output is ${outputDuration}s, input is ${duration}s: treating the encode as failed`);
                 process.exitCode = 1;
             }
