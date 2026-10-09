@@ -74,6 +74,52 @@ test('fails when 10 s of a one-hour input are missing from the output', () => {
     assert.strictEqual(runEnc('exit 0', { inputDuration: '3600', outputDuration: '3590' }), 1);
 });
 
+/** A shell command printing ffmpeg 9's timestamp discontinuity warnings with the given offsets (µs) to stderr */
+const discontinuities = (...offsets) =>
+    offsets
+        .map(
+            (offset, i) =>
+                `printf '%s\\n' '[aist#0:3/aac @ 0x5f] timestamp discontinuity (stream id=273): ${i}, new offset= ${offset}' >&2; `,
+        )
+        .join('');
+
+test('exits 0 when the output is short only by the time ffmpeg closed up at timestamp discontinuities', () => {
+    // the 81 s slice of a recording with a 10.176 s reception dropout: offset -10.176 s, output 10.17 s shorter
+    const result = runEncResult(`${discontinuities(-10176000)}exit 0`, { inputDuration: '79.342066', outputDuration: '69.169' });
+
+    assert.strictEqual(result.status, 0);
+    assert.match(
+        String(result.stderr),
+        /^enc\.js: output is 69\.169s, input is 79\.342066s: ffmpeg closed up 10\.176s of timestamp gaps \(no data in the input\), so the output is complete$/m,
+    );
+});
+
+test('allows the closed-up time on top of the 5 s', () => {
+    assert.strictEqual(runEnc(`${discontinuities(-10000000)}exit 0`, { outputDuration: '85' }), 0);
+    assert.strictEqual(runEnc(`${discontinuities(-10000000)}exit 0`, { outputDuration: '84.9' }), 1);
+});
+
+test('takes the closed-up time from the last offset, which is cumulative', () => {
+    // as ffmpeg reports one gap: the audio jumps, the video then appears to jump back, then the audio again
+    assert.strictEqual(runEnc(`${discontinuities(-10176000, 1, -10176000)}exit 0`, { outputDuration: '85' }), 0);
+    // a jump that was undone later closed nothing up
+    assert.strictEqual(runEnc(`${discontinuities(-10176000, 1)}exit 0`, { outputDuration: '85' }), 1);
+});
+
+test('does not ask for a longer output when ffmpeg shifted the timestamps forward', () => {
+    assert.strictEqual(runEnc(`${discontinuities(3000000)}exit 0`, { outputDuration: '95' }), 0);
+});
+
+test('fails a truncated output despite closed-up gaps, naming the closed-up time', () => {
+    const result = runEncResult(`${discontinuities(-10176000)}exit 0`, { inputDuration: '79.342066', outputDuration: '48.312' });
+
+    assert.strictEqual(result.status, 1);
+    assert.match(
+        String(result.stderr),
+        /^enc\.js: output is 48\.312s, input is 79\.342066s, of which ffmpeg closed up 10\.176s of timestamp gaps: treating the encode as failed$/m,
+    );
+});
+
 test('does not check the output when the input duration cannot be read', () => {
     assert.strictEqual(runEnc('exit 0', { inputDuration: 'N/A', outputDuration: '10' }), 0);
     assert.strictEqual(runEnc('exit 0', { inputDuration: '0', outputDuration: '10' }), 0);

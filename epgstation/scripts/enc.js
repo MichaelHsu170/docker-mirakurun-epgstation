@@ -21,6 +21,12 @@ const MAX_MISSING_SECONDS = 5;
 // 約 24 Mbps でも 60 秒分以上あり、30 秒より先に打ち切られない)
 const PROBE_ARGS = ['-analyzeduration', '30M', '-probesize', '200M'];
 
+// ffmpeg は入力 (mpegts) のタイムスタンプが -dts_delta_threshold (既定 10 秒) を超えて飛ぶと、以降のタイム
+// スタンプをずらしてその間を詰める (受信が途切れて TS にもデータがない部分など)。その警告行の
+// "new offset= N" は入力全体の累積のずれ (µs) で、負の値の分だけ出力は入力より短くなる。
+// 例: [aist#0:3/aac @ 0x5f...] timestamp discontinuity (stream id=273): 10176000, new offset= -10176000
+const DISCONTINUITY_REG = /timestamp discontinuity .*new offset= (-?\d+)/;
+
 /**
  * 動画長取得関数
  * @param {string} filePath ファイルパス
@@ -113,6 +119,8 @@ const getDuration = filePath => {
     // ffmpeg は進捗行を \r で終え、エラーなどは \n で終える。チャンクの境界は行の途中にもなるため、
     // 最後の不完全な行は次のチャンクと合わせて処理する
     let stderrRest = '';
+    // 最後に報告された累積のずれ (µs)
+    let discontinuityOffset = 0;
     child.stderr.on('data', data => {
         let strbyline = (stderrRest + String(data)).split(/[\r\n]+/);
         stderrRest = strbyline.pop();
@@ -121,6 +129,10 @@ const getDuration = filePath => {
             if (!str.startsWith('frame')) {
                 // non-progress line (version info, errors, stream mapping etc.) — forward to stderr
                 if (str !== '') process.stderr.write(str + '\n');
+                const discontinuity = str.match(DISCONTINUITY_REG);
+                if (discontinuity !== null) {
+                    discontinuityOffset = parseInt(discontinuity[1], 10);
+                }
                 continue;
             }
             if (str.startsWith('frame')) {
@@ -228,16 +240,25 @@ const getDuration = filePath => {
 
         // ffmpeg が正常終了しても入力の欠落部分を詰めて短い動画を出力することがある。
         // 成功扱いにすると元ファイルが削除されて欠落部分が失われるため、出力が入力より
-        // MAX_MISSING_SECONDS 秒を超えて短ければ失敗として返す。入力の長さが分からない場合は判定しない
+        // MAX_MISSING_SECONDS 秒を超えて短ければ失敗として返す。ただし ffmpeg がタイムスタンプの飛びを
+        // 詰めた時間 (DISCONTINUITY_REG) は入力にデータがなく失われないため、その分も短くてよい。
+        // 入力の長さが分からない場合は判定しない
         if (!Number.isFinite(duration) || duration <= 0) {
             console.error(`enc.js: input duration is unknown (${duration}): not checking the output duration`);
             return;
         }
         try {
             const outputDuration = await getDuration(output);
-            if (!(outputDuration >= duration - MAX_MISSING_SECONDS)) {
-                console.error(`enc.js: output is ${outputDuration}s, input is ${duration}s: treating the encode as failed`);
+            const closedSeconds = Math.max(0, -discontinuityOffset / 1e6);
+            if (!(outputDuration >= duration - MAX_MISSING_SECONDS - closedSeconds)) {
+                console.error(
+                    `enc.js: output is ${outputDuration}s, input is ${duration}s, of which ffmpeg closed up ${closedSeconds}s of timestamp gaps: treating the encode as failed`,
+                );
                 process.exitCode = 1;
+            } else if (!(outputDuration >= duration - MAX_MISSING_SECONDS)) {
+                console.error(
+                    `enc.js: output is ${outputDuration}s, input is ${duration}s: ffmpeg closed up ${closedSeconds}s of timestamp gaps (no data in the input), so the output is complete`,
+                );
             }
         } catch (err) {
             console.error('enc.js: cannot read the output duration:', err);
