@@ -15,10 +15,11 @@ const crypto = require('crypto');
  * @param {string} ffprobePath
  * @param {string} ffmpegPath
  * @param {string} inputPath ローカルファイルパス (シーク可能であること)
+ * @param {string[]} [inputArgs] ffprobe/ffmpeg の入力オプション (-i の前に付ける。-analyzeduration など)
  * @returns {Promise<{filterComplex: string|null, audioMapArgs: string[], trackCount: number}>}
  */
-async function audioTrackPlan(ffprobePath, ffmpegPath, inputPath) {
-    const audioStreams = await getAudioStreamCount(ffprobePath, inputPath);
+async function audioTrackPlan(ffprobePath, ffmpegPath, inputPath, inputArgs = []) {
+    const audioStreams = await getAudioStreamCount(ffprobePath, inputPath, inputArgs);
 
     if (audioStreams === 0) {
         return { filterComplex: null, audioMapArgs: [], trackCount: 0 };
@@ -28,7 +29,7 @@ async function audioTrackPlan(ffprobePath, ffmpegPath, inputPath) {
         return { filterComplex: null, audioMapArgs: ['-map', '0:a'], trackCount: audioStreams };
     }
 
-    const isDualMono = await checkDualMono(ffmpegPath, inputPath);
+    const isDualMono = await checkDualMono(ffmpegPath, inputPath, inputArgs);
     if (!isDualMono) {
         return { filterComplex: null, audioMapArgs: ['-map', '0:a'], trackCount: 1 };
     }
@@ -45,13 +46,14 @@ async function audioTrackPlan(ffprobePath, ffmpegPath, inputPath) {
 /**
  * @param {string} ffprobePath
  * @param {string} inputPath
+ * @param {string[]} [inputArgs] 入力オプション
  * @return {Promise<number>}
  */
-function getAudioStreamCount(ffprobePath, inputPath) {
+function getAudioStreamCount(ffprobePath, inputPath, inputArgs = []) {
     return new Promise((resolve, reject) => {
         execFile(
             ffprobePath,
-            ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'json', inputPath],
+            ['-v', 'error', ...inputArgs, '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'json', inputPath],
             (err, stdout) => {
                 if (err) {
                     reject(err);
@@ -73,12 +75,13 @@ function getAudioStreamCount(ffprobePath, inputPath) {
  * 結果が異なれば二カ国語放送と判定する。
  * @param {string} ffmpegPath
  * @param {string} inputPath
+ * @param {string[]} inputArgs 入力オプション
  * @return {Promise<boolean>}
  */
-async function checkDualMono(ffmpegPath, inputPath) {
+async function checkDualMono(ffmpegPath, inputPath, inputArgs) {
     const [mainHash, subHash] = await Promise.all([
-        decodeAndHash(ffmpegPath, inputPath, 'main'),
-        decodeAndHash(ffmpegPath, inputPath, 'sub'),
+        decodeAndHash(ffmpegPath, inputPath, 'main', inputArgs),
+        decodeAndHash(ffmpegPath, inputPath, 'sub', inputArgs),
     ]);
 
     return mainHash !== subHash;
@@ -88,13 +91,15 @@ async function checkDualMono(ffmpegPath, inputPath) {
  * @param {string} ffmpegPath
  * @param {string} inputPath
  * @param {'main'|'sub'} mode
+ * @param {string[]} inputArgs 入力オプション
  * @return {Promise<string>}
  */
-function decodeAndHash(ffmpegPath, inputPath, mode) {
+function decodeAndHash(ffmpegPath, inputPath, mode, inputArgs) {
     return new Promise((resolve, reject) => {
         const args = [
             '-v', 'error',
             '-dual_mono_mode', mode,
+            ...inputArgs,
             '-i', inputPath,
             '-map', '0:a:0',
             '-t', '5',

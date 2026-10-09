@@ -15,6 +15,12 @@ const USE_GPU = process.argv[2] !== 'cpu';
 // までの分などで数秒は短くなるため、割合ではなく秒数で判定する)
 const MAX_MISSING_SECONDS = 5;
 
+// ストリーム検出の入力オプション。既定 (5 MB, BS で約 2 秒分) では、PMT にあってもデータの始まりが遅い
+// 音声 (副音声など) が見つからず、srcs/ffmpeg ではそのストリームが破棄されて出力から黙って欠ける。
+// 入力はシーク可能な録画ファイルなので先頭 30 秒分まで探す (200 MB は BS の最大ビットレート
+// 約 24 Mbps でも 60 秒分以上あり、30 秒より先に打ち切られない)
+const PROBE_ARGS = ['-analyzeduration', '30M', '-probesize', '200M'];
+
 /**
  * 動画長取得関数
  * @param {string} filePath ファイルパス
@@ -44,7 +50,7 @@ const getDuration = filePath => {
     const duration = await getDuration(input);
     // 音声ストリーム構成 (実ストリーム数・二カ国語判定) を実際にデコードして判定する。
     // EPG由来のメタデータ (AUDIOCOMPONENTTYPE) は誤りや欠落があり得るため信頼しない。
-    const plan = await audioTrackPlan(ffprobe, ffmpeg, input);
+    const plan = await audioTrackPlan(ffprobe, ffmpeg, input, PROBE_ARGS);
 
     const args = ['-y'];
     // 字幕用
@@ -59,7 +65,7 @@ const getDuration = filePath => {
         Array.prototype.push.apply(args, ['-dual_mono_mode', 'main']);
     }
     // input 設定
-    Array.prototype.push.apply(args, ['-i', input]);
+    Array.prototype.push.apply(args, [...PROBE_ARGS, '-i', input]);
     // 音声ストリーム分割 (二カ国語放送の場合のみ channelsplit を適用)
     if (plan.filterComplex) {
         Array.prototype.push.apply(args, ['-filter_complex', plan.filterComplex]);

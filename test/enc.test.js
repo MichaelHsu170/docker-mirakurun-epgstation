@@ -132,7 +132,7 @@ test('splits dual-mono audio into a Japanese and an English track', () => {
 
         const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
         assert.deepStrictEqual(args, [
-            '-y', '-fix_sub_duration', '-i', env.INPUT,
+            '-y', '-fix_sub_duration', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
             '-filter_complex',
             '[0:a:0]channelsplit=channel_layout=stereo[FL0][FR0];[FL0]aformat=channel_layouts=mono[FL];[FR0]aformat=channel_layouts=mono[FR]',
             '-map', '0:v', '-c:v', 'libx264', '-vf', 'yadif',
@@ -154,10 +154,30 @@ test('decodes only the main language when the audio becomes dual-mono after the 
 
         const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
         assert.deepStrictEqual(args, [
-            '-y', '-fix_sub_duration', '-dual_mono_mode', 'main', '-i', env.INPUT,
+            '-y', '-fix_sub_duration', '-dual_mono_mode', 'main', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
             '-map', '0:v', '-c:v', 'libx264', '-vf', 'yadif',
             '-map', '0:a', '-c:a', 'aac',
             '-map', '0:s?', '-c:s', 'srt', '-preset', 'veryfast', '-crf', '26', env.OUTPUT,
+        ]);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('probes 30 s of the input for streams in the stream count and the dual-mono check as well', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'enc-test-'));
+    try {
+        const callLog = path.join(dir, 'calls');
+        const env = writeFakes(dir, 'exit 0', { audioStreams: 1, dualMono: false, callLog });
+
+        assert.strictEqual(spawnSync(process.execPath, [encJs, 'cpu'], { env }).status, 0);
+
+        const calls = fs.readFileSync(callLog, 'utf8').trimEnd().split('\n');
+        const probeCalls = calls.filter(c => c.includes('-select_streams a') || c.includes('-v error -dual_mono_mode'));
+        assert.deepStrictEqual(probeCalls.sort(), [
+            `ffmpeg -v error -dual_mono_mode main -analyzeduration 30M -probesize 200M -i ${env.INPUT} -map 0:a:0 -t 5 -f wav -`,
+            `ffmpeg -v error -dual_mono_mode sub -analyzeduration 30M -probesize 200M -i ${env.INPUT} -map 0:a:0 -t 5 -f wav -`,
+            `ffprobe -v error -analyzeduration 30M -probesize 200M -select_streams a -show_entries stream=index -of json ${env.INPUT}`,
         ]);
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });

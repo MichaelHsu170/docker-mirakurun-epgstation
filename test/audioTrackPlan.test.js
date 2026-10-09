@@ -6,13 +6,24 @@ const path = require('path');
 const { writeFakeTools } = require('./fakeTools.js');
 const { audioTrackPlan } = require('../epgstation/scripts/lib/audioTrackPlan.js');
 
-/** Runs audioTrackPlan with the fakes of fakeTools.js (the options in tools). */
-const plan = async (t, tools) => {
+/** Runs audioTrackPlan with the fakes of fakeTools.js (the options in tools) and the given input options. */
+const plan = async (t, tools, inputArgs) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audio-track-plan-test-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const { ffmpeg, ffprobe } = writeFakeTools(dir, tools);
 
-    return audioTrackPlan(ffprobe, ffmpeg, path.join(dir, 'in.m2ts'));
+    return audioTrackPlan(ffprobe, ffmpeg, path.join(dir, 'in.m2ts'), inputArgs);
+};
+
+/** The calls of the fakes while audioTrackPlan runs with the given input options, sorted */
+const callsOf = async (t, inputArgs) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audio-track-plan-test-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const callLog = path.join(dir, 'calls');
+    const { ffmpeg, ffprobe } = writeFakeTools(dir, { audioStreams: 1, callLog });
+    await audioTrackPlan(ffprobe, ffmpeg, 'in.m2ts', inputArgs);
+
+    return fs.readFileSync(callLog, 'utf8').trimEnd().split('\n').sort();
 };
 
 test('maps no audio when there is no audio stream', async t => {
@@ -48,6 +59,22 @@ test('maps every audio stream when there are several, without checking for dual 
 
 test('rejects when the dual-mono check cannot decode the audio', async t => {
     await assert.rejects(plan(t, { audioStreams: 1, dualMono: 'fail' }), /ffmpeg exited with code 1 \(dual_mono_mode=(main|sub)\)/);
+});
+
+test('puts the input options before the input in every probe and decode', async t => {
+    assert.deepStrictEqual(await callsOf(t, ['-analyzeduration', '7M']), [
+        'ffmpeg -v error -dual_mono_mode main -analyzeduration 7M -i in.m2ts -map 0:a:0 -t 5 -f wav -',
+        'ffmpeg -v error -dual_mono_mode sub -analyzeduration 7M -i in.m2ts -map 0:a:0 -t 5 -f wav -',
+        'ffprobe -v error -analyzeduration 7M -select_streams a -show_entries stream=index -of json in.m2ts',
+    ]);
+});
+
+test('adds no input options when none are given', async t => {
+    assert.deepStrictEqual(await callsOf(t), [
+        'ffmpeg -v error -dual_mono_mode main -i in.m2ts -map 0:a:0 -t 5 -f wav -',
+        'ffmpeg -v error -dual_mono_mode sub -i in.m2ts -map 0:a:0 -t 5 -f wav -',
+        'ffprobe -v error -select_streams a -show_entries stream=index -of json in.m2ts',
+    ]);
 });
 
 test('rejects when ffprobe fails', async t => {

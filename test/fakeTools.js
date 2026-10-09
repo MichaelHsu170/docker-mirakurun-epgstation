@@ -10,6 +10,7 @@ const path = require('path');
  * - ffmpeg answers the dual-mono check (-v error -dual_mono_mode main/sub) with different audio when dualMono is
  *   true, the same audio when it is false, and fails it when it is 'fail'; any other call runs
  *   ffmpegScript (sh, with the arguments in "$@").
+ * - with callLog, both append a line "<ffprobe|ffmpeg> <arguments>" to that file for every call.
  */
 const writeFakeTools = (
     dir,
@@ -20,13 +21,15 @@ const writeFakeTools = (
         audioStreams = 0,
         dualMono = false,
         probeSeconds = 0,
+        callLog = null,
     } = {},
 ) => {
+    const logCall = name => (callLog ? `echo "${name} $*" >> '${callLog}'\n` : '');
     const streams = JSON.stringify(Array.from({ length: audioStreams }, (_, i) => ({ index: i + 1 })));
     const ffprobe = path.join(dir, 'ffprobe');
     fs.writeFileSync(
         ffprobe,
-        `#!/bin/sh\nsleep ${probeSeconds}\nfor a; do last="$a"; done\n` +
+        `#!/bin/sh\n${logCall('ffprobe')}sleep ${probeSeconds}\nfor a; do last="$a"; done\n` +
             `case "$last" in *.mkv) d='${outputDuration}';; *) d='${inputDuration}';; esac\n` +
             '[ "$d" = fail ] && exit 1\n' +
             `printf '%s\\n' '{"format":{"duration":"'"$d"'"},"streams":${streams}}'\n`,
@@ -37,6 +40,7 @@ const writeFakeTools = (
     fs.writeFileSync(
         ffmpeg,
         '#!/bin/sh\n' +
+            logCall('ffmpeg') +
             `case "$*" in *'-v error -dual_mono_mode main'*) ${decode('main')};; ` +
             `*'-v error -dual_mono_mode sub'*) ${decode(dualMono ? 'sub' : 'main')};; esac\n` +
             `${ffmpegScript}\n`,
