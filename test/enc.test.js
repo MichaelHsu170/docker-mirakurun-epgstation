@@ -144,6 +144,26 @@ test('splits dual-mono audio into a Japanese and an English track', () => {
     }
 });
 
+test('decodes only the main language when the audio becomes dual-mono after the probe window', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'enc-test-'));
+    try {
+        const argsFile = path.join(dir, 'args');
+        const env = writeFakes(dir, `printf '%s\\n' "$@" > '${argsFile}'`, { audioStreams: 1, dualMono: false });
+
+        assert.strictEqual(spawnSync(process.execPath, [encJs, 'cpu'], { env }).status, 0);
+
+        const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
+        assert.deepStrictEqual(args, [
+            '-y', '-fix_sub_duration', '-dual_mono_mode', 'main', '-i', env.INPUT,
+            '-map', '0:v', '-c:v', 'libx264', '-vf', 'yadif',
+            '-map', '0:a', '-c:a', 'aac',
+            '-map', '0:s?', '-c:s', 'srt', '-preset', 'veryfast', '-crf', '26', env.OUTPUT,
+        ]);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 test('cancelling stops ffmpeg even though EPGStation closes the output pipes first', async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'enc-test-'));
     const pidFile = path.join(dir, 'ffmpeg.pid');

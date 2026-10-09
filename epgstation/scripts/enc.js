@@ -53,6 +53,11 @@ const getDuration = filePath => {
     if (USE_GPU) {
         Array.prototype.push.apply(args, ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda']);
     }
+    if (!plan.filterComplex) {
+        // 判定 (先頭 5 秒) の後で二カ国語 (dual-mono) になっても主音声のみを出す。
+        // channelsplit で両方を分ける場合は両チャンネルが必要なため付けない
+        Array.prototype.push.apply(args, ['-dual_mono_mode', 'main']);
+    }
     // input 設定
     Array.prototype.push.apply(args, ['-i', input]);
     // 音声ストリーム分割 (二カ国語放送の場合のみ channelsplit を適用)
