@@ -66,6 +66,7 @@ services:
       dockerfile: docker/Dockerfile
       additional_contexts:
         ffmpegsrc: ../srcs/ffmpeg
+        cuda: ./cuda   # the CUDA installer, linked here by launch.sh build (kept out of the main context)
     runtime: nvidia
     volumes:
       - ./epgstation/config:/app/config

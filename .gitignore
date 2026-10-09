@@ -25,4 +25,7 @@
 !/epgstation/config/serviceLogConfig.sample.yml
 /epgstation/data/*.json
 /epgstation/logs/.logrotate-state/
+# the CUDA installer that launch.sh build links here for EPGStation's image (build context "cuda")
+/cuda/*
+!/cuda/.gitkeep
 !.gitkeep
