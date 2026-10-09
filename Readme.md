@@ -4,27 +4,30 @@
 
 ## 前提条件
 
-- Docker, docker-compose の導入が必須
+- Docker, Docker Compose v2 (`docker compose`) の導入が必須
 - ホスト上の pcscd は停止する
 - チューナーのドライバが適切にインストールされていること
 
 ## インストール手順
 
+このフォークは tv_live リポジトリの一部で、イメージのビルドと起動は `../launch.sh` で行う
+(テストなどの手順は `../setup.txt`)。`setup.sh` は存在しない設定ファイルをテンプレートから作成するだけで、
+コンテナは起動しない。
+
 ```sh
-curl -sf https://raw.githubusercontent.com/l3tnun/docker-mirakurun-epgstation/v2/setup.sh | sh -s
-cd docker-mirakurun-epgstation
+sh setup.sh
 
 #チャンネル設定
 vim mirakurun/conf/channels.yml
 
-#コメントアウトされている restart や user の設定を適宜変更する
-vim docker-compose.yml
+#イメージのビルド (.env にバージョンを書き込む)
+bash ../launch.sh build
 ```
 
 ## 起動
 
 ```sh
-sudo docker-compose up -d
+bash ../launch.sh start
 ```
 
 ## チャンネルスキャン地上波のみ(取得漏れが出る場合もあるので注意)
@@ -38,18 +41,15 @@ mirakurun の EPG 更新を待ってからブラウザで http://DockerHostIP:88
 ## 停止
 
 ```sh
-sudo docker-compose down
+bash ../launch.sh stop
 ```
 
 ## 更新
 
 ```sh
-# mirakurunとdbを更新
-sudo docker-compose pull
-# epgstationを更新
-sudo docker-compose build --pull
-# 最新のイメージを元に起動
-sudo docker-compose up -d
+# srcs/Mirakurun と srcs/EPGStation からイメージをビルドし直して起動
+bash ../launch.sh build
+bash ../launch.sh restart
 ```
 
 ## 設定

@@ -11,4 +11,3 @@ copy_missing epgstation/config/config.yml.template epgstation/config/config.yml
 copy_missing epgstation/config/operatorLogConfig.sample.yml epgstation/config/operatorLogConfig.yml
 copy_missing epgstation/config/epgUpdaterLogConfig.sample.yml epgstation/config/epgUpdaterLogConfig.yml
 copy_missing epgstation/config/serviceLogConfig.sample.yml epgstation/config/serviceLogConfig.yml
-docker-compose run --rm -e SETUP=true mirakurun
