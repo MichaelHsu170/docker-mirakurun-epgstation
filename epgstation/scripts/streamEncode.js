@@ -291,8 +291,11 @@ function bufferProbeWindow(ffprobePath, tempFile) {
         process.exitCode = 1;
     });
 
+    // ffmpeg が終了したら (異常終了でも) このプロセスも終了する。EPGStation は stdin に書き込み続け、
+    // stdout は pipe() では閉じられないため、終了しないと EPGStation がストリームを止めず
+    // チューナーも解放されない。シグナルで終了した場合 code は null になるため失敗 (1) とする
     child.on('close', code => {
-        process.exitCode = code;
+        process.exit(code === null ? 1 : code);
     });
 
     process.removeListener('SIGINT', exitOnSignal);
