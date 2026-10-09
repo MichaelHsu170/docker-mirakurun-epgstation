@@ -16,6 +16,9 @@ services:
       - ./mirakurun/data:/app-data
     environment:
       TZ: "Asia/Tokyo"
+      # skip container-init.sh's npm install of arib-b25-stream-test on every start: only the disabled
+      # dvbv5 tuners (adapter1-4) use it; remove this before enabling them (tv_live/setup.txt)
+      DISABLE_B25_TEST: "1"
     devices:
       - /dev/bus:/dev/bus
       - /dev/dvb:/dev/dvb
