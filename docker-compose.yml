@@ -107,6 +107,10 @@ services:
       - ./epgstation/logs:/app/logs
       - ./logrotate.d:/etc/logrotate-src:ro
       - ./epgstation/logs/.logrotate-state:/var/lib/logrotate
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - dlan
 
