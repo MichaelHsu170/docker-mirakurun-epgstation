@@ -5,6 +5,9 @@ services:
     build:
       context: ../srcs/Mirakurun
       dockerfile: docker/Dockerfile
+    # Mirakurun saves its pending program changes on stop (up to 25 s, see src/server.ts); docker's 10 s default
+    # could cut a save off on the busy disk
+    stop_grace_period: 30s
     cap_add:
       - SYS_ADMIN
       - SYS_NICE
