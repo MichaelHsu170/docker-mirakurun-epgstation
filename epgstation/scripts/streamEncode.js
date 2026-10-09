@@ -164,6 +164,9 @@ function bufferProbeWindow(ffprobePath, tempFile) {
             done = true;
             clearTimeout(timer);
             clearTimeout(fastTimer);
+            // 判定中に届く入力をメモリに溜め込まないよう、stdin を止めてパイプ側で待たせる
+            // (録画ファイルはディスク速度で流し込まれる)。後の pipe() が再開する
+            process.stdin.pause();
             out.end(() => resolve({ tempFile, tailChunks, cleanup }));
         }
 
@@ -235,6 +238,11 @@ function bufferProbeWindow(ffprobePath, tempFile) {
 
     const args = ['-y'];
     Array.prototype.push.apply(args, profile.inputArgs(quality));
+    if (!plan.filterComplex) {
+        // 判定後に二カ国語 (dual-mono) の番組が始まっても主音声のみを出す。
+        // channelsplit で両方を分ける場合は両チャンネルが必要なため付けない
+        Array.prototype.push.apply(args, ['-dual_mono_mode', 'main']);
+    }
     Array.prototype.push.apply(args, ['-i', 'pipe:0']);
     if (plan.filterComplex) {
         Array.prototype.push.apply(args, ['-filter_complex', plan.filterComplex]);
@@ -277,6 +285,7 @@ function bufferProbeWindow(ffprobePath, tempFile) {
     bufferedReadStream.on('end', () => {
         // ここで同期的に listener を外してから pipe() に切り替えるため、
         // onData が tailChunks に追記し続ける (メモリリーク) 隙間は生じない。
+        // finish() で止めた stdin は pipe() が再開する。
         cleanup();
         for (const chunk of tailChunks) {
             child.stdin.write(chunk);
