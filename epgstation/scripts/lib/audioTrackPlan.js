@@ -1,13 +1,13 @@
 const { execFile, spawn } = require('child_process');
 
-// 二カ国語判定は先頭 DUAL_MONO_DECODE_SECONDS 秒をデコードし、その末尾 DUAL_MONO_JUDGE_SECONDS 秒で行う。
-// 録画の先頭には前の番組の音声が 1 秒余り入ることがある (EIT の番組切り替えが音声の切り替えより 0.9-1.4 秒
-// 先に来る) ため、先頭の 2 秒は判定に使わない (前の番組の二カ国語で、ステレオの番組全体を左右に分けないように)。
-// デコードできた音声が DUAL_MONO_DECODE_SECONDS より短い場合 (ストリームの数秒の判定ウィンドウ) も、その末尾で判定する
+// 二カ国語判定は入力の DUAL_MONO_JUDGE_START 秒目から DUAL_MONO_DECODE_SECONDS 秒をデコードして行う。番組の録画の先頭には
+// 前の番組の音声が入る (Mirakurun が番組の開始を待つ間に溜めた最大 8 MiB と、EIT の番組切り替えから音声が切り替わるまでの
+// 放送局の遅れ。実測で NHK BS 5.3 秒、ヒストリーチャンネル 19.2 秒) ため、先頭で判定すると前の番組の音声で決まる
+// (ステレオの後の二カ国語番組が主音声だけになり、二カ国語の後のステレオ番組が左右に分かれる)。60 秒は 8 MiB が 1.5 Mbps でも
+// 45 秒、それに遅れの実測の最大 8.6 秒を足しても収まる。それより短い録画は末尾の DUAL_MONO_DECODE_SECONDS 秒で判定する。
+// 長さの分からない入力 (ストリームの判定ウィンドウ) は先頭から判定する
+const DUAL_MONO_JUDGE_START = 60;
 const DUAL_MONO_DECODE_SECONDS = 5;
-const DUAL_MONO_JUDGE_SECONDS = 3;
-// 判定のデコード出力 (s16le, 48 kHz, 2 ch) の 1 秒あたりのバイト数
-const PCM_BYTES_PER_SECOND = 48000 * 2 * 2;
 
 /**
  * 音声ストリーム数と二カ国語判定 (PCEのdual-mono判定はデコードしないと分からないため
@@ -29,9 +29,10 @@ const PCM_BYTES_PER_SECOND = 48000 * 2 * 2;
  * @param {string} inputPath ローカルファイルパス (シーク可能であること)
  * @param {string[]} [inputArgs] ffprobe/ffmpeg の入力オプション (-i の前に付ける。-analyzeduration など)
  * @param {boolean} [firstTrackOnly] 最初の実音声ストリームだけを使う
+ * @param {number} [inputDuration] 入力の長さ (秒)。分かれば番組の中の音声で二カ国語を判定する (DUAL_MONO_JUDGE_START)
  * @returns {Promise<{filterComplex: string|null, audioMapArgs: string[], trackCount: number}>}
  */
-async function audioTrackPlan(ffprobePath, ffmpegPath, inputPath, inputArgs = [], firstTrackOnly = false) {
+async function audioTrackPlan(ffprobePath, ffmpegPath, inputPath, inputArgs = [], firstTrackOnly = false, inputDuration = 0) {
     const audioStreams = await getAudioStreamCount(ffprobePath, inputPath, inputArgs);
     const audioMap = firstTrackOnly ? '0:a:0' : '0:a';
 
@@ -43,7 +44,9 @@ async function audioTrackPlan(ffprobePath, ffmpegPath, inputPath, inputArgs = []
         return { filterComplex: null, audioMapArgs: ['-map', audioMap], trackCount: firstTrackOnly ? 1 : audioStreams };
     }
 
-    const isDualMono = await checkDualMono(ffmpegPath, inputPath, inputArgs);
+    // 0 以下 (長さが分からない NaN も) なら先頭から判定する
+    const judgeStart = Math.min(DUAL_MONO_JUDGE_START, inputDuration - DUAL_MONO_DECODE_SECONDS);
+    const isDualMono = await checkDualMono(ffmpegPath, inputPath, inputArgs, judgeStart);
     if (!isDualMono) {
         return { filterComplex: null, audioMapArgs: ['-map', audioMap], trackCount: 1 };
     }
@@ -85,21 +88,21 @@ function getAudioStreamCount(ffprobePath, inputPath, inputArgs = []) {
 }
 
 /**
- * 最初の実音声ストリームを -dual_mono_mode main / sub でそれぞれ数秒デコードし、
- * 末尾 DUAL_MONO_JUDGE_SECONDS 秒の結果が異なれば二カ国語放送と判定する。
+ * 最初の実音声ストリームを -dual_mono_mode main / sub でそれぞれ judgeStart 秒目から数秒デコードし、
+ * 結果が異なれば二カ国語放送と判定する。
  * @param {string} ffmpegPath
  * @param {string} inputPath
  * @param {string[]} inputArgs 入力オプション
+ * @param {number} judgeStart デコードを始める位置 (秒)
  * @return {Promise<boolean>}
  */
-async function checkDualMono(ffmpegPath, inputPath, inputArgs) {
+async function checkDualMono(ffmpegPath, inputPath, inputArgs, judgeStart) {
     const [main, sub] = await Promise.all([
-        decodeAudio(ffmpegPath, inputPath, 'main', inputArgs),
-        decodeAudio(ffmpegPath, inputPath, 'sub', inputArgs),
+        decodeAudio(ffmpegPath, inputPath, 'main', inputArgs, judgeStart),
+        decodeAudio(ffmpegPath, inputPath, 'sub', inputArgs, judgeStart),
     ]);
-    const judgeBytes = DUAL_MONO_JUDGE_SECONDS * PCM_BYTES_PER_SECOND;
 
-    return !main.subarray(-judgeBytes).equals(sub.subarray(-judgeBytes));
+    return !main.equals(sub);
 }
 
 /**
@@ -107,20 +110,20 @@ async function checkDualMono(ffmpegPath, inputPath, inputArgs) {
  * @param {string} inputPath
  * @param {'main'|'sub'} mode
  * @param {string[]} inputArgs 入力オプション
- * @return {Promise<Buffer>} 先頭 DUAL_MONO_DECODE_SECONDS 秒の PCM (s16le, 48 kHz, 2 ch)
+ * @param {number} judgeStart デコードを始める位置 (秒。0 以下か NaN なら先頭)
+ * @return {Promise<Buffer>} judgeStart 秒目から DUAL_MONO_DECODE_SECONDS 秒の PCM (s16le)
  */
-function decodeAudio(ffmpegPath, inputPath, mode, inputArgs) {
+function decodeAudio(ffmpegPath, inputPath, mode, inputArgs, judgeStart) {
     return new Promise((resolve, reject) => {
         const args = [
             '-v', 'error',
             '-dual_mono_mode', mode,
             ...inputArgs,
+            ...(judgeStart > 0 ? ['-ss', String(judgeStart)] : []),
             '-i', inputPath,
             '-map', '0:a:0',
             '-t', String(DUAL_MONO_DECODE_SECONDS),
             '-f', 's16le',
-            '-ac', '2',
-            '-ar', '48000',
             '-',
         ];
         const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'ignore'] });

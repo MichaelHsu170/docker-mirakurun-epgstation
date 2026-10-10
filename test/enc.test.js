@@ -190,6 +190,31 @@ test('splits dual-mono audio into a Japanese and an English track', () => {
     }
 });
 
+test('splits a dual-mono recording that starts with 19.2 s of the previous program\'s stereo', () => {
+    // History 06:00 (review D12-1): the program's dual mono starts 19.2 s into its recording
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'enc-test-'));
+    try {
+        const argsFile = path.join(dir, 'args');
+        const env = writeFakes(dir, `printf '%s\\n' "$@" > '${argsFile}'`, {
+            audioStreams: 1,
+            dualMono: [[19.2, false], [231.8, true]],
+            inputDuration: '251',
+            outputDuration: '251',
+        });
+
+        assert.strictEqual(spawnSync(process.execPath, [encJs, 'cpu'], { env }).status, 0);
+
+        const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
+        assert.deepStrictEqual(args.slice(args.indexOf('-filter_complex'), args.indexOf('-filter_complex') + 2), [
+            '-filter_complex',
+            '[0:a:0]channelsplit=channel_layout=stereo[FL0][FR0];[FL0]aformat=channel_layouts=mono[FL];[FR0]aformat=channel_layouts=mono[FR]',
+        ]);
+        assert.strictEqual(args.includes('-dual_mono_mode'), false);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 test('decodes only the main language when the audio becomes dual-mono after the probe window', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'enc-test-'));
     try {
@@ -210,7 +235,7 @@ test('decodes only the main language when the audio becomes dual-mono after the 
     }
 });
 
-test('probes 30 s of the input for streams in the stream count and the dual-mono check as well', () => {
+test('probes 30 s of the input for streams in the stream count and the dual-mono check, which decodes from 60 s in', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'enc-test-'));
     try {
         const callLog = path.join(dir, 'calls');
@@ -221,8 +246,8 @@ test('probes 30 s of the input for streams in the stream count and the dual-mono
         const calls = fs.readFileSync(callLog, 'utf8').trimEnd().split('\n');
         const probeCalls = calls.filter(c => c.includes('-select_streams a') || c.includes('-v error -dual_mono_mode'));
         assert.deepStrictEqual(probeCalls.sort(), [
-            `ffmpeg -v error -dual_mono_mode main -analyzeduration 30M -probesize 200M -i ${env.INPUT} -map 0:a:0 -t 5 -f s16le -ac 2 -ar 48000 -`,
-            `ffmpeg -v error -dual_mono_mode sub -analyzeduration 30M -probesize 200M -i ${env.INPUT} -map 0:a:0 -t 5 -f s16le -ac 2 -ar 48000 -`,
+            `ffmpeg -v error -dual_mono_mode main -analyzeduration 30M -probesize 200M -ss 60 -i ${env.INPUT} -map 0:a:0 -t 5 -f s16le -`,
+            `ffmpeg -v error -dual_mono_mode sub -analyzeduration 30M -probesize 200M -ss 60 -i ${env.INPUT} -map 0:a:0 -t 5 -f s16le -`,
             `ffprobe -v error -analyzeduration 30M -probesize 200M -select_streams a -show_entries stream=index -of json ${env.INPUT}`,
         ]);
     } finally {

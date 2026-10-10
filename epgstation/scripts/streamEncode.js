@@ -16,11 +16,12 @@ const ffprobe = path.join(path.dirname(ffmpeg), 'ffprobe');
 
 // pipe:0 は非シーク可能なため、最初の数秒 (or 数MB) をバッファして一時ファイルに書き出し、
 // それに対して音声構成を判定してから実際の ffmpeg を起動する。
-// 録画はディスクの速度で届くため、待たずに二カ国語判定の 5 秒分 (BS の最大ビットレート約 24 Mbps でも
-// 16 MB で 5 秒以上) をバッファする。先頭の 2 秒に前の番組の二カ国語が入っていても、その後で判定できる
-// (audioTrackPlan.js の DUAL_MONO_DECODE_SECONDS)。ライブは実時間で届くため、開始を遅らせないよう 3 秒か 6 MB まで
+// 二カ国語はこのウィンドウの先頭から判定するため、録画を先頭から再生すると、録画の先頭に入る前の番組の音声
+// (5-19 秒。audioTrackPlan.js の DUAL_MONO_JUDGE_START) で決まる。番組の中 (BS では 30 秒目でも約 100 MB 先) まで
+// 読んで判定すると、空いた録画ディスクからでも開始が 0.6-0.8 秒遅れる (6 MB は 0.1 秒) ため、そうしていない
+// (ストリームには再生位置が渡されないため、先頭からの再生だけを区別することもできない)
 const PROBE_MAX_MS = 3000;
-const PROBE_MAX_BYTES = (context === 'recorded' ? 16 : 6) * 1024 * 1024;
+const PROBE_MAX_BYTES = 6 * 1024 * 1024;
 
 // 実音声ストリームが2以上 (既に分離済み) か0の場合は dual-mono 判定が不要なため、
 // そのことをPMT等から判別できる程度の小さいウィンドウだけ先にバッファし、早期に
@@ -254,7 +255,7 @@ function bufferProbeWindow(ffprobePath, tempFile) {
     const args = ['-y'];
     Array.prototype.push.apply(args, profile.inputArgs(quality));
     if (!plan.filterComplex) {
-        // 判定区間の外にある二カ国語 (dual-mono) の部分 (先頭に残る前の番組の音声や、判定後に始まる番組) も
+        // 判定区間の外にある二カ国語 (dual-mono) の部分 (録画の先頭に残る前の番組の音声や、判定後に始まる番組) も
         // 主音声のみを出す。
         // channelsplit で両方を分ける場合は両チャンネルが必要なため付けない
         Array.prototype.push.apply(args, ['-dual_mono_mode', 'main']);

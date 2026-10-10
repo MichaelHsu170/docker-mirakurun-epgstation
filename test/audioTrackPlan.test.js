@@ -6,22 +6,26 @@ const path = require('path');
 const { writeFakeTools } = require('./fakeTools.js');
 const { audioTrackPlan } = require('../epgstation/scripts/lib/audioTrackPlan.js');
 
-/** Runs audioTrackPlan with the fakes of fakeTools.js (the options in tools) and the given input options. */
-const plan = async (t, tools, inputArgs, firstTrackOnly) => {
+/** Runs audioTrackPlan with the fakes of fakeTools.js (the options in tools) and the given arguments. */
+const plan = async (t, tools, inputArgs, firstTrackOnly, inputDuration) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audio-track-plan-test-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const { ffmpeg, ffprobe } = writeFakeTools(dir, tools);
 
-    return audioTrackPlan(ffprobe, ffmpeg, path.join(dir, 'in.m2ts'), inputArgs, firstTrackOnly);
+    return audioTrackPlan(ffprobe, ffmpeg, path.join(dir, 'in.m2ts'), inputArgs, firstTrackOnly, inputDuration);
 };
 
-/** The calls of the fakes while audioTrackPlan runs with the given input options, sorted */
-const callsOf = async (t, inputArgs) => {
+/** The plan of an encode (all tracks) of a recording with the given audio parts ([seconds, isDualMono]) */
+const recordingPlan = (t, parts) =>
+    plan(t, { audioStreams: 1, dualMono: parts }, [], false, parts.reduce((sum, [seconds]) => sum + seconds, 0));
+
+/** The calls of the fakes while audioTrackPlan runs with the given input options and duration, sorted */
+const callsOf = async (t, inputArgs, inputDuration) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audio-track-plan-test-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const callLog = path.join(dir, 'calls');
     const { ffmpeg, ffprobe } = writeFakeTools(dir, { audioStreams: 1, callLog });
-    await audioTrackPlan(ffprobe, ffmpeg, 'in.m2ts', inputArgs);
+    await audioTrackPlan(ffprobe, ffmpeg, 'in.m2ts', inputArgs, false, inputDuration);
 
     return fs.readFileSync(callLog, 'utf8').trimEnd().split('\n').sort();
 };
@@ -57,31 +61,42 @@ const SPLIT = {
 };
 const NO_SPLIT = { filterComplex: null, audioMapArgs: ['-map', '0:a'], trackCount: 1 };
 
-// a recording starts at the EIT switch, which came 0.86-1.43 s before the audio change at NHK G (review D11-2)
-test('does not split a stereo recording that starts with 1.4 s of the previous program\'s dual mono', async t => {
-    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[1.4, true], [60, false]] }), NO_SPLIT);
+// a program recording starts with the previous program: up to 8 MiB that Mirakurun held while it waited for the
+// program, then the broadcaster's lag from the EIT switch to the audio change (review D12-1: 19.2 s at History 06:00,
+// 5.3 s at NHK BS 05:30)
+test('splits a dual-mono recording that starts with 19.2 s of the previous program\'s stereo', async t => {
+    assert.deepStrictEqual(await recordingPlan(t, [[19.2, false], [100, true]]), SPLIT);
 });
 
-test('splits a dual-mono recording that starts with 1.4 s of the previous program\'s stereo', async t => {
-    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[1.4, false], [60, true]] }), SPLIT);
+test('does not split a stereo recording that starts with 19.2 s of the previous program\'s dual mono', async t => {
+    assert.deepStrictEqual(await recordingPlan(t, [[19.2, true], [100, false]]), NO_SPLIT);
 });
 
-test('judges dual mono on the last 3 of the first 5 s: a lead-in of 1.9 s is ignored, one of 2.1 s is not', async t => {
-    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[1.9, true], [60, false]] }), NO_SPLIT);
-    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[2.1, true], [60, false]] }), SPLIT);
+test('judges dual mono on the 5 s from 60 s into a recording', async t => {
+    // a lead-in of 59 s is ignored
+    assert.deepStrictEqual(await recordingPlan(t, [[59, true], [100, false]]), NO_SPLIT);
+    // dual mono from 64 s on is inside the window, from 66 s on is not
+    assert.deepStrictEqual(await recordingPlan(t, [[64, false], [100, true]]), SPLIT);
+    assert.deepStrictEqual(await recordingPlan(t, [[66, false], [100, true]]), NO_SPLIT);
 });
 
-test('does not split audio that turns dual mono only after the first 5 s', async t => {
-    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[5.5, false], [60, true]] }), NO_SPLIT);
+test('judges a recording shorter than 65 s on its last 5 s', async t => {
+    assert.deepStrictEqual(await recordingPlan(t, [[19.2, false], [10.8, true]]), SPLIT);
+    assert.deepStrictEqual(await recordingPlan(t, [[19.2, true], [10.8, false]]), NO_SPLIT);
+    // a recording of 5 s or less is judged from its start
+    assert.deepStrictEqual(await recordingPlan(t, [[3, true]]), SPLIT);
 });
 
-test('still splits dual mono in a probe window shorter than 5 s, as a live stream\'s 2-3 s window', async t => {
+test('judges an input of unknown duration, as a stream\'s probe window, on its first 5 s as a whole', async t => {
     assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[2, true]] }, [], true), SPLIT);
-    // the last 3 s of a 4 s window: the dual mono of its first second is ignored
-    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[1, true], [3, false]] }, [], true), {
+    // dual mono anywhere in the first 5 s splits, after them it does not
+    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[1, true], [3, false]] }, [], true), SPLIT);
+    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[4.5, false], [60, true]] }, [], true), SPLIT);
+    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[5.5, false], [60, true]] }, [], true), {
         ...NO_SPLIT,
         audioMapArgs: ['-map', '0:a:0'],
     });
+    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[5.5, false], [60, true]] }, [], false, NaN), NO_SPLIT);
 });
 
 test('maps every audio stream when there are several, without checking for dual mono', async t => {
@@ -130,17 +145,34 @@ test('rejects when the dual-mono check cannot decode the audio', async t => {
 
 test('puts the input options before the input in every probe and decode', async t => {
     assert.deepStrictEqual(await callsOf(t, ['-analyzeduration', '7M']), [
-        'ffmpeg -v error -dual_mono_mode main -analyzeduration 7M -i in.m2ts -map 0:a:0 -t 5 -f s16le -ac 2 -ar 48000 -',
-        'ffmpeg -v error -dual_mono_mode sub -analyzeduration 7M -i in.m2ts -map 0:a:0 -t 5 -f s16le -ac 2 -ar 48000 -',
+        'ffmpeg -v error -dual_mono_mode main -analyzeduration 7M -i in.m2ts -map 0:a:0 -t 5 -f s16le -',
+        'ffmpeg -v error -dual_mono_mode sub -analyzeduration 7M -i in.m2ts -map 0:a:0 -t 5 -f s16le -',
         'ffprobe -v error -analyzeduration 7M -select_streams a -show_entries stream=index -of json in.m2ts',
     ]);
 });
 
 test('adds no input options when none are given', async t => {
     assert.deepStrictEqual(await callsOf(t), [
-        'ffmpeg -v error -dual_mono_mode main -i in.m2ts -map 0:a:0 -t 5 -f s16le -ac 2 -ar 48000 -',
-        'ffmpeg -v error -dual_mono_mode sub -i in.m2ts -map 0:a:0 -t 5 -f s16le -ac 2 -ar 48000 -',
+        'ffmpeg -v error -dual_mono_mode main -i in.m2ts -map 0:a:0 -t 5 -f s16le -',
+        'ffmpeg -v error -dual_mono_mode sub -i in.m2ts -map 0:a:0 -t 5 -f s16le -',
         'ffprobe -v error -select_streams a -show_entries stream=index -of json in.m2ts',
+    ]);
+});
+
+test('seeks the dual-mono decodes, after the input options, to 60 s or to 5 s before the end of a shorter input', async t => {
+    assert.deepStrictEqual(await callsOf(t, ['-analyzeduration', '7M'], 1800.5), [
+        'ffmpeg -v error -dual_mono_mode main -analyzeduration 7M -ss 60 -i in.m2ts -map 0:a:0 -t 5 -f s16le -',
+        'ffmpeg -v error -dual_mono_mode sub -analyzeduration 7M -ss 60 -i in.m2ts -map 0:a:0 -t 5 -f s16le -',
+        'ffprobe -v error -analyzeduration 7M -select_streams a -show_entries stream=index -of json in.m2ts',
+    ]);
+    assert.deepStrictEqual((await callsOf(t, [], 30.5)).slice(0, 2), [
+        'ffmpeg -v error -dual_mono_mode main -ss 25.5 -i in.m2ts -map 0:a:0 -t 5 -f s16le -',
+        'ffmpeg -v error -dual_mono_mode sub -ss 25.5 -i in.m2ts -map 0:a:0 -t 5 -f s16le -',
+    ]);
+    // no seek for an input of 5 s or less
+    assert.deepStrictEqual((await callsOf(t, [], 4)).slice(0, 2), [
+        'ffmpeg -v error -dual_mono_mode main -i in.m2ts -map 0:a:0 -t 5 -f s16le -',
+        'ffmpeg -v error -dual_mono_mode sub -i in.m2ts -map 0:a:0 -t 5 -f s16le -',
     ]);
 });
 
