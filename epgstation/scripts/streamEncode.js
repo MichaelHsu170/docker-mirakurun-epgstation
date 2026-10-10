@@ -226,8 +226,13 @@ function bufferProbeWindow(ffprobePath, tempFile) {
     process.on('SIGINT', exitOnSignal);
     process.on('SIGTERM', exitOnSignal);
     // 停止時、EPGStation は先に stdout/stderr を閉じてから SIGINT を送る。閉じたパイプへの
-    // 書き込みエラー (EPIPE) で先に落ちると SIGINT を ffmpeg に転送できないため、書き込みエラーは無視する
-    process.stdout.on('error', () => {});
+    // 書き込みエラー (EPIPE) で先に落ちると SIGINT を ffmpeg に転送できないため、書き込みエラーは無視する。
+    // stdout のエラーで pipe() は外れるので、ffmpeg の出力は読み捨て続ける (読まないと ffmpeg が満杯の
+    // パイプへの書き込みで止まり、SIGINT でも終了しない)
+    let child = null;
+    process.stdout.on('error', () => {
+        if (child !== null) child.stdout.resume();
+    });
     process.stderr.on('error', () => {});
 
     const { tailChunks, cleanup } = await bufferProbeWindow(ffprobe, tempFile);
@@ -266,7 +271,7 @@ function bufferProbeWindow(ffprobePath, tempFile) {
 
     process.stderr.write('streamEncode.js: ffmpeg command: ' + ffmpeg + ' ' + args.join(' ') + '\n');
 
-    const child = spawn(ffmpeg, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    child = spawn(ffmpeg, args, { stdio: ['pipe', 'pipe', 'pipe'] });
 
     // ffmpeg がstdinを閉じた後も process.stdin/tailChunks からの書き込みが続くと
     // EPIPEが発生する。'error' リスナーが無いと未処理例外としてプロセス全体が

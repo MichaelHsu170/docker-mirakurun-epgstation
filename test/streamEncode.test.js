@@ -77,12 +77,14 @@ test('stopping forwards SIGINT to ffmpeg even though EPGStation closes the outpu
         } catch (err) {}
         fs.rmSync(dir, { recursive: true, force: true });
     });
-    // two audio streams: the probe window ends after the first ffprobe check, without waiting for the input
+    // two audio streams: the probe window ends after the first ffprobe check, without waiting for the input.
+    // Like real ffmpeg it writes 64 KiB chunks, so once nothing reads its stdout it blocks on the full pipe
+    // and only gets to its SIGINT trap if streamEncode.js keeps draining it
     const { ffmpeg } = writeFakeTools(dir, {
         audioStreams: 2,
         ffmpegScript:
             `echo $$ > '${pidFile}'\ntrap "touch '${marker}'; exit 255" INT\n` +
-            "while true; do printf 'TS'; printf 'frame= 1\\r' >&2; sleep 0.05; done",
+            "while true; do head -c 65536 /dev/zero; printf 'frame= 1\\r' >&2; sleep 0.05; done",
     });
 
     const child = spawn(process.execPath, [streamEncodeJs, 'live', 'm2ts', '720p', ffmpeg], {
