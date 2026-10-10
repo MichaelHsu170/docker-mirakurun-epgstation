@@ -67,7 +67,7 @@ bash ../launch.sh restart
 
 * 録画データ
 
-```./recorded```
+```/home/michaelhsu/Storage/tv_live/recorded``` (docker-compose.yml でマウント。リポジトリ内の ./recorded は使われない)
 
 * サムネイル
 
