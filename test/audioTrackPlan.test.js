@@ -7,12 +7,12 @@ const { writeFakeTools } = require('./fakeTools.js');
 const { audioTrackPlan } = require('../epgstation/scripts/lib/audioTrackPlan.js');
 
 /** Runs audioTrackPlan with the fakes of fakeTools.js (the options in tools) and the given input options. */
-const plan = async (t, tools, inputArgs) => {
+const plan = async (t, tools, inputArgs, firstTrackOnly) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audio-track-plan-test-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const { ffmpeg, ffprobe } = writeFakeTools(dir, tools);
 
-    return audioTrackPlan(ffprobe, ffmpeg, path.join(dir, 'in.m2ts'), inputArgs);
+    return audioTrackPlan(ffprobe, ffmpeg, path.join(dir, 'in.m2ts'), inputArgs, firstTrackOnly);
 };
 
 /** The calls of the fakes while audioTrackPlan runs with the given input options, sorted */
@@ -55,6 +55,37 @@ test('maps every audio stream when there are several, without checking for dual 
         audioMapArgs: ['-map', '0:a'],
         trackCount: 2,
     });
+});
+
+test('maps only the first of several audio streams for a stream, without checking for dual mono', async t => {
+    // a 2nd audio stream that leaves the PMT mid-program stalls every output of ffmpeg 9
+    assert.deepStrictEqual(await plan(t, { audioStreams: 2, dualMono: 'fail' }, [], true), {
+        filterComplex: null,
+        audioMapArgs: ['-map', '0:a:0'],
+        trackCount: 1,
+    });
+});
+
+test('maps only the first audio stream for a stream when it is not dual mono', async t => {
+    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: false }, [], true), {
+        filterComplex: null,
+        audioMapArgs: ['-map', '0:a:0'],
+        trackCount: 1,
+    });
+});
+
+test('still splits a dual-mono audio stream into two tracks for a stream', async t => {
+    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: true }, [], true), {
+        filterComplex:
+            '[0:a:0]channelsplit=channel_layout=stereo[FL0][FR0];' +
+            '[FL0]aformat=channel_layouts=mono[FL];[FR0]aformat=channel_layouts=mono[FR]',
+        audioMapArgs: ['-map', '[FL]', '-map', '[FR]'],
+        trackCount: 2,
+    });
+});
+
+test('maps no audio for a stream when there is no audio stream', async t => {
+    assert.deepStrictEqual(await plan(t, { audioStreams: 0 }, [], true), { filterComplex: null, audioMapArgs: [], trackCount: 0 });
 });
 
 test('rejects when the dual-mono check cannot decode the audio', async t => {

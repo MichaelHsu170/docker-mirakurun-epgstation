@@ -112,13 +112,14 @@ test('stopping forwards SIGINT to ffmpeg even though EPGStation closes the outpu
     assert.strictEqual(code, 255); // ffmpeg's exit code after SIGINT
 });
 
-test('builds the ffmpeg arguments of a live profile', { timeout: 10000 }, async t => {
+test('builds the ffmpeg arguments of a live profile, with only the first of two audio streams', { timeout: 10000 }, async t => {
+    // ffmpeg 9 stops every output when a mapped 2nd audio stream leaves the PMT
     const { code, ffmpegArgs } = await runStreamEncode(t, ['live', 'm2ts', '720p'], { audioStreams: 2 });
 
     assert.strictEqual(code, 0);
     assert.deepStrictEqual(ffmpegArgs, [
         '-y', '-re', '-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda', '-dual_mono_mode', 'main', '-i', 'pipe:0',
-        '-map', '0:v', '-map', '0:a',
+        '-map', '0:v', '-map', '0:a:0',
         '-sn', '-threads', '0',
         '-c:v', 'h264_nvenc', '-vf', 'yadif_cuda,scale_cuda=-2:720', '-b:v', '3000k',
         '-c:a', 'aac', '-ar', '48000', '-b:a', '192k',
@@ -133,7 +134,7 @@ test('builds the ffmpeg arguments of the live low-latency profile, which copies 
     assert.strictEqual(code, 0);
     assert.deepStrictEqual(ffmpegArgs, [
         '-y', '-f', 'mpegts', '-analyzeduration', '500000', '-dual_mono_mode', 'main', '-i', 'pipe:0',
-        '-map', '0:v', '-map', '0:a',
+        '-map', '0:v', '-map', '0:a:0',
         '-fflags', 'nobuffer', '-flags', 'low_delay', '-max_delay', '250000', '-max_interleave_delta', '1', '-threads', '0',
         '-c:v', 'libx264', '-flags', '+cgop', '-vf', 'yadif,scale=-2:480', '-b:v', '1500k', '-preset', 'veryfast',
         '-c:a', 'aac', '-ar', '48000', '-b:a', '128k',
@@ -157,12 +158,12 @@ test('builds the ffmpeg arguments of a recorded profile with dual-mono audio', {
     ]);
 });
 
-test('maps any audio when the audio streams cannot be checked', { timeout: 10000 }, async t => {
+test('maps the first audio stream, if any, when the audio streams cannot be checked', { timeout: 10000 }, async t => {
     const { code, ffmpegArgs } = await runStreamEncode(t, ['live', 'webm', '720p'], { audioStreams: 1, dualMono: 'fail' });
 
     assert.strictEqual(code, 0);
     assert.deepStrictEqual(ffmpegArgs.slice(0, 9), ['-y', '-re', '-dual_mono_mode', 'main', '-i', 'pipe:0', '-map', '0:v', '-map']);
-    assert.strictEqual(ffmpegArgs[9], '0:a?');
+    assert.strictEqual(ffmpegArgs[9], '0:a:0?');
 });
 
 test('reads no more input while it checks the audio layout, then passes all of it to ffmpeg', { timeout: 30000 }, async t => {

@@ -238,12 +238,14 @@ function bufferProbeWindow(ffprobePath, tempFile) {
 
     const { tailChunks, cleanup } = await bufferProbeWindow(ffprobe, tempFile);
 
+    // 音声は最初の1本 (二カ国語なら主・副) のみ。2本目以降は番組の途中で PMT から消えることがあり、
+    // ffmpeg 9 はそれを待って全出力を止める (audioTrackPlan の firstTrackOnly)
     let plan;
     try {
-        plan = await audioTrackPlan(ffprobe, ffmpeg, tempFile);
+        plan = await audioTrackPlan(ffprobe, ffmpeg, tempFile, [], true);
     } catch (e) {
         process.stderr.write(`streamEncode.js: audioTrackPlan failed: ${e.message}\n`);
-        plan = { filterComplex: null, audioMapArgs: ['-map', '0:a?'], trackCount: 1 };
+        plan = { filterComplex: null, audioMapArgs: ['-map', '0:a:0?'], trackCount: 1 };
     }
 
     const args = ['-y'];

@@ -18,10 +18,10 @@ test('stream commands map only the first audio track, which every recording has'
     );
 });
 
-test('live and recorded TS HLS commands map only video and audio', () => {
+test('live and recorded TS HLS commands map only video and the first audio stream', () => {
     // ffmpeg 9 holds the video back while it waits for the next packet of a sparse or untimed stream (the captions'
     // ID3 track, EIT, superimpose): with `-map 0` live HLS writes no segment until the input ends, and recorded HLS
-    // first reads the whole recording into memory
+    // first reads the whole recording into memory. A 2nd audio stream that leaves the PMT mid-program does the same
     const lines = fs.readFileSync(configYml, 'utf8').split('\n');
     const hlsCmds = (from, to) => {
         const section = lines.slice(lines.indexOf(from), lines.indexOf(to));
@@ -31,6 +31,6 @@ test('live and recorded TS HLS commands map only video and audio', () => {
 
     assert.strictEqual(cmds.length, 4);
     for (const cmd of cmds) {
-        assert.deepStrictEqual([...cmd.matchAll(/-map (\S+)/g)].map(m => m[1]), ['0:v', '0:a']);
+        assert.deepStrictEqual([...cmd.matchAll(/-map (\S+)/g)].map(m => m[1]), ['0:v', '0:a:0']);
     }
 });

@@ -12,26 +12,32 @@ const crypto = require('crypto');
  * - 実音声ストリームが1で二カ国語でない: そのまま1トラックとして -map する
  * - 実音声ストリームが0: 音声を一切 map しない
  *
+ * firstTrackOnly (ストリーミング用) では実音声ストリームが1以上なら最初の1本 (0:a:0) だけを使う
+ * (二カ国語の channelsplit はそのまま)。2本目以降が番組の途中で PMT から消えると (NHK の解説音声は番組終了前に
+ * 消える)、ffmpeg 9 はその出力ストリームを待ち続けて全出力を止め、入力をメモリに溜め続けるため。
+ *
  * @param {string} ffprobePath
  * @param {string} ffmpegPath
  * @param {string} inputPath ローカルファイルパス (シーク可能であること)
  * @param {string[]} [inputArgs] ffprobe/ffmpeg の入力オプション (-i の前に付ける。-analyzeduration など)
+ * @param {boolean} [firstTrackOnly] 最初の実音声ストリームだけを使う
  * @returns {Promise<{filterComplex: string|null, audioMapArgs: string[], trackCount: number}>}
  */
-async function audioTrackPlan(ffprobePath, ffmpegPath, inputPath, inputArgs = []) {
+async function audioTrackPlan(ffprobePath, ffmpegPath, inputPath, inputArgs = [], firstTrackOnly = false) {
     const audioStreams = await getAudioStreamCount(ffprobePath, inputPath, inputArgs);
+    const audioMap = firstTrackOnly ? '0:a:0' : '0:a';
 
     if (audioStreams === 0) {
         return { filterComplex: null, audioMapArgs: [], trackCount: 0 };
     }
 
     if (audioStreams >= 2) {
-        return { filterComplex: null, audioMapArgs: ['-map', '0:a'], trackCount: audioStreams };
+        return { filterComplex: null, audioMapArgs: ['-map', audioMap], trackCount: firstTrackOnly ? 1 : audioStreams };
     }
 
     const isDualMono = await checkDualMono(ffmpegPath, inputPath, inputArgs);
     if (!isDualMono) {
-        return { filterComplex: null, audioMapArgs: ['-map', '0:a'], trackCount: 1 };
+        return { filterComplex: null, audioMapArgs: ['-map', audioMap], trackCount: 1 };
     }
 
     return {

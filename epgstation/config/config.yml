@@ -86,17 +86,19 @@ stream:
 
             # 映像と音声のみ出力する。字幕 (ID3) やデータストリームはまばらか、タイムスタンプを持たず、ffmpeg 9 は
             # それらの次のパケットを待つ間映像を止める (字幕の無い番組では入力が終わるまでセグメントが出ない)
+            # 音声は最初の1本のみ。2本目 (解説音声など) は番組の途中で PMT から消えることがあり、ffmpeg 9 はそれを
+            # 待ち続けて全出力を止める (入力はメモリに溜まり続ける)
             hls:
                 - name: 720p
                   cmd:
-                      '%FFMPEG% -re -dual_mono_mode main -i pipe:0 -map 0:v -map 0:a -threads 0
+                      '%FFMPEG% -re -dual_mono_mode main -i pipe:0 -map 0:v -map 0:a:0 -threads 0
                       -max_muxing_queue_size 1024 -f hls -hls_time 3 -hls_list_size 17 -hls_allow_cache 1
                       -hls_segment_filename %streamFileDir%/stream%streamNum%-%09d.ts -hls_flags delete_segments -c:a
                       aac -ar 48000 -b:a 192k -ac 2 -c:v libx264 -vf yadif,scale=-2:720 -b:v 3000k -preset veryfast
                       -flags +loop-global_header %OUTPUT%'
                 - name: 480p
                   cmd:
-                      '%FFMPEG% -re -dual_mono_mode main -i pipe:0 -map 0:v -map 0:a -threads 0
+                      '%FFMPEG% -re -dual_mono_mode main -i pipe:0 -map 0:v -map 0:a:0 -threads 0
                       -max_muxing_queue_size 1024 -f hls -hls_time 3 -hls_list_size 17 -hls_allow_cache 1
                       -hls_segment_filename %streamFileDir%/stream%streamNum%-%09d.ts -hls_flags delete_segments -c:a
                       aac -ar 48000 -b:a 128k -ac 2 -c:v libx264 -vf yadif,scale=-2:480 -b:v 1500k -preset veryfast
@@ -115,19 +117,19 @@ stream:
                 - name: 480p
                   cmd: '%NODE% %ROOT%/scripts/streamEncode.js recorded mp4 480p %FFMPEG%'
 
-            # 映像と音声のみ出力する (ライブの hls と同じ理由)。-map 0 では ffmpeg が映像を止めたまま入力を読み続け、
+            # 映像と最初の音声のみ出力する (ライブの hls と同じ理由)。-map 0 では ffmpeg が映像を止めたまま入力を読み続け、
             # 録画ファイル全体をメモリに読み込むまでセグメントが出ない
             hls:
                 - name: 720p
                   cmd:
-                      '%FFMPEG% -dual_mono_mode main -i pipe:0 -map 0:v -map 0:a -threads 0
+                      '%FFMPEG% -dual_mono_mode main -i pipe:0 -map 0:v -map 0:a:0 -threads 0
                       -max_muxing_queue_size 1024 -f hls -hls_time 3 -hls_list_size 0 -hls_allow_cache 1
                       -hls_segment_filename %streamFileDir%/stream%streamNum%-%09d.ts -hls_flags delete_segments -c:a
                       aac -ar 48000 -b:a 192k -ac 2 -c:v libx264 -vf yadif,scale=-2:720 -b:v 3000k -preset veryfast
                       -flags +loop-global_header %OUTPUT%'
                 - name: 480p
                   cmd:
-                      '%FFMPEG% -dual_mono_mode main -i pipe:0 -map 0:v -map 0:a -threads 0
+                      '%FFMPEG% -dual_mono_mode main -i pipe:0 -map 0:v -map 0:a:0 -threads 0
                       -max_muxing_queue_size 1024 -f hls -hls_time 3 -hls_list_size 0 -hls_allow_cache 1
                       -hls_segment_filename %streamFileDir%/stream%streamNum%-%09d.ts -hls_flags delete_segments -c:a
                       aac -ar 48000 -b:a 128k -ac 2 -c:v libx264 -vf yadif,scale=-2:480 -b:v 1500k -preset veryfast
