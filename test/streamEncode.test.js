@@ -126,6 +126,21 @@ test('builds the ffmpeg arguments of a live profile', { timeout: 10000 }, async 
     ]);
 });
 
+test('builds the ffmpeg arguments of the live low-latency profile, which copies no subtitle or data stream', { timeout: 10000 }, async t => {
+    // ffmpeg 9 holds the video back while it waits for the next packet of such a stream
+    const { code, ffmpegArgs } = await runStreamEncode(t, ['live', 'm2tsll', '480p'], { audioStreams: 2 });
+
+    assert.strictEqual(code, 0);
+    assert.deepStrictEqual(ffmpegArgs, [
+        '-y', '-f', 'mpegts', '-analyzeduration', '500000', '-dual_mono_mode', 'main', '-i', 'pipe:0',
+        '-map', '0:v', '-map', '0:a',
+        '-fflags', 'nobuffer', '-flags', 'low_delay', '-max_delay', '250000', '-max_interleave_delta', '1', '-threads', '0',
+        '-c:v', 'libx264', '-flags', '+cgop', '-vf', 'yadif,scale=-2:480', '-b:v', '1500k', '-preset', 'veryfast',
+        '-c:a', 'aac', '-ar', '48000', '-b:a', '128k',
+        '-f', 'mpegts', 'pipe:1',
+    ]);
+});
+
 test('builds the ffmpeg arguments of a recorded profile with dual-mono audio', { timeout: 10000 }, async t => {
     const { code, ffmpegArgs } = await runStreamEncode(t, ['recorded', 'webm', '480p'], { audioStreams: 1, dualMono: true });
 

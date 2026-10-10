@@ -46,8 +46,9 @@ const PROFILES = {
         },
         m2tsll: {
             inputArgs: () => ['-f', 'mpegts', '-analyzeduration', '500000'],
+            // 映像と音声のみ出力する。字幕・データストリーム (字幕スーパー, EIT) はまばらかタイムスタンプを持たず、ffmpeg 9 は
+            // それらを待って映像を止める (データでは入力が終わるまで、字幕の無い番組の字幕では数秒ごとに)
             extraArgs: () => [
-                '-map', '0:s?', '-map', '0:d?', '-c:s', 'copy', '-c:d', 'copy', '-ignore_unknown',
                 '-fflags', 'nobuffer', '-flags', 'low_delay', '-max_delay', '250000', '-max_interleave_delta', '1',
                 '-threads', '0',
             ],
