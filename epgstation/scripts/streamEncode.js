@@ -225,6 +225,10 @@ function bufferProbeWindow(ffprobePath, tempFile) {
     const exitOnSignal = () => process.exit(1);
     process.on('SIGINT', exitOnSignal);
     process.on('SIGTERM', exitOnSignal);
+    // 停止時、EPGStation は先に stdout/stderr を閉じてから SIGINT を送る。閉じたパイプへの
+    // 書き込みエラー (EPIPE) で先に落ちると SIGINT を ffmpeg に転送できないため、書き込みエラーは無視する
+    process.stdout.on('error', () => {});
+    process.stderr.on('error', () => {});
 
     const { tailChunks, cleanup } = await bufferProbeWindow(ffprobe, tempFile);
 

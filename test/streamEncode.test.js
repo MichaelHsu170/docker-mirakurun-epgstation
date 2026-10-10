@@ -66,6 +66,50 @@ test('fails when ffmpeg is killed by a signal', { timeout: 10000 }, async t => {
     assert.strictEqual(code, 1);
 });
 
+test('stopping forwards SIGINT to ffmpeg even though EPGStation closes the output pipes first', { timeout: 10000 }, async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stream-encode-test-'));
+    const pidFile = path.join(dir, 'ffmpeg.pid');
+    const marker = path.join(dir, 'got-sigint');
+    t.after(() => {
+        // never leave the fake ffmpeg running, even when the test fails
+        try {
+            process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL');
+        } catch (err) {}
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+    // two audio streams: the probe window ends after the first ffprobe check, without waiting for the input
+    const { ffmpeg } = writeFakeTools(dir, {
+        audioStreams: 2,
+        ffmpegScript:
+            `echo $$ > '${pidFile}'\ntrap "touch '${marker}'; exit 255" INT\n` +
+            "while true; do printf 'TS'; printf 'frame= 1\\r' >&2; sleep 0.05; done",
+    });
+
+    const child = spawn(process.execPath, [streamEncodeJs, 'live', 'm2ts', '720p', ffmpeg], {
+        env: { ...process.env, TMPDIR: dir },
+    });
+    t.after(() => child.kill('SIGKILL'));
+    child.stdin.on('error', () => {});
+    child.stdin.write(Buffer.alloc(188 * 100, 0x47));
+    const exited = new Promise(resolve => child.on('exit', resolve));
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+    while (!fs.existsSync(pidFile)) {
+        await sleep(50);
+    }
+    await sleep(300);
+
+    // what EPGStation's ProcessUtil.kill does: end stdin, destroy stdout/stderr, then SIGINT 500 ms later
+    child.stdin.end();
+    child.stdout.destroy();
+    child.stderr.destroy();
+    await sleep(500);
+    child.kill('SIGINT');
+    const code = await Promise.race([exited, sleep(3000).then(() => 'still running')]);
+
+    assert.strictEqual(fs.existsSync(marker), true, 'ffmpeg did not receive SIGINT');
+    assert.strictEqual(code, 255); // ffmpeg's exit code after SIGINT
+});
+
 test('builds the ffmpeg arguments of a live profile', { timeout: 10000 }, async t => {
     const { code, ffmpegArgs } = await runStreamEncode(t, ['live', 'm2ts', '720p'], { audioStreams: 2 });
 
