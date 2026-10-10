@@ -1,5 +1,13 @@
 const { execFile, spawn } = require('child_process');
-const crypto = require('crypto');
+
+// 二カ国語判定は先頭 DUAL_MONO_DECODE_SECONDS 秒をデコードし、その末尾 DUAL_MONO_JUDGE_SECONDS 秒で行う。
+// 録画の先頭には前の番組の音声が 1 秒余り入ることがある (EIT の番組切り替えが音声の切り替えより 0.9-1.4 秒
+// 先に来る) ため、先頭の 2 秒は判定に使わない (前の番組の二カ国語で、ステレオの番組全体を左右に分けないように)。
+// デコードできた音声が DUAL_MONO_DECODE_SECONDS より短い場合 (ストリームの数秒の判定ウィンドウ) も、その末尾で判定する
+const DUAL_MONO_DECODE_SECONDS = 5;
+const DUAL_MONO_JUDGE_SECONDS = 3;
+// 判定のデコード出力 (s16le, 48 kHz, 2 ch) の 1 秒あたりのバイト数
+const PCM_BYTES_PER_SECOND = 48000 * 2 * 2;
 
 /**
  * 音声ストリーム数と二カ国語判定 (PCEのdual-mono判定はデコードしないと分からないため
@@ -78,19 +86,20 @@ function getAudioStreamCount(ffprobePath, inputPath, inputArgs = []) {
 
 /**
  * 最初の実音声ストリームを -dual_mono_mode main / sub でそれぞれ数秒デコードし、
- * 結果が異なれば二カ国語放送と判定する。
+ * 末尾 DUAL_MONO_JUDGE_SECONDS 秒の結果が異なれば二カ国語放送と判定する。
  * @param {string} ffmpegPath
  * @param {string} inputPath
  * @param {string[]} inputArgs 入力オプション
  * @return {Promise<boolean>}
  */
 async function checkDualMono(ffmpegPath, inputPath, inputArgs) {
-    const [mainHash, subHash] = await Promise.all([
-        decodeAndHash(ffmpegPath, inputPath, 'main', inputArgs),
-        decodeAndHash(ffmpegPath, inputPath, 'sub', inputArgs),
+    const [main, sub] = await Promise.all([
+        decodeAudio(ffmpegPath, inputPath, 'main', inputArgs),
+        decodeAudio(ffmpegPath, inputPath, 'sub', inputArgs),
     ]);
+    const judgeBytes = DUAL_MONO_JUDGE_SECONDS * PCM_BYTES_PER_SECOND;
 
-    return mainHash !== subHash;
+    return !main.subarray(-judgeBytes).equals(sub.subarray(-judgeBytes));
 }
 
 /**
@@ -98,9 +107,9 @@ async function checkDualMono(ffmpegPath, inputPath, inputArgs) {
  * @param {string} inputPath
  * @param {'main'|'sub'} mode
  * @param {string[]} inputArgs 入力オプション
- * @return {Promise<string>}
+ * @return {Promise<Buffer>} 先頭 DUAL_MONO_DECODE_SECONDS 秒の PCM (s16le, 48 kHz, 2 ch)
  */
-function decodeAndHash(ffmpegPath, inputPath, mode, inputArgs) {
+function decodeAudio(ffmpegPath, inputPath, mode, inputArgs) {
     return new Promise((resolve, reject) => {
         const args = [
             '-v', 'error',
@@ -108,21 +117,23 @@ function decodeAndHash(ffmpegPath, inputPath, mode, inputArgs) {
             ...inputArgs,
             '-i', inputPath,
             '-map', '0:a:0',
-            '-t', '5',
-            '-f', 'wav',
+            '-t', String(DUAL_MONO_DECODE_SECONDS),
+            '-f', 's16le',
+            '-ac', '2',
+            '-ar', '48000',
             '-',
         ];
         const child = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'ignore'] });
-        const hash = crypto.createHash('sha256');
+        const chunks = [];
 
-        child.stdout.on('data', chunk => hash.update(chunk));
+        child.stdout.on('data', chunk => chunks.push(chunk));
         child.on('error', reject);
         child.on('close', code => {
             if (code !== 0) {
                 reject(new Error(`ffmpeg exited with code ${code} (dual_mono_mode=${mode})`));
                 return;
             }
-            resolve(hash.digest('hex'));
+            resolve(Buffer.concat(chunks));
         });
     });
 }

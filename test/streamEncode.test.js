@@ -170,7 +170,7 @@ test('reads no more input while it checks the audio layout, then passes all of i
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stream-encode-test-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const countFile = path.join(dir, 'count');
-    // each ffprobe call takes 3 s, so the check runs for at least 3 s after the 6 MiB probe window is full
+    // each ffprobe call takes 3 s, so the check runs for at least 3 s after the 16 MiB probe window is full
     const { ffmpeg } = writeFakeTools(dir, { audioStreams: 2, probeSeconds: 3, ffmpegScript: `wc -c > '${countFile}'` });
 
     const child = spawn(process.execPath, [streamEncodeJs, 'recorded', 'mp4', '720p', ffmpeg], {
@@ -180,7 +180,7 @@ test('reads no more input while it checks the audio layout, then passes all of i
     const exited = new Promise(resolve => child.on('exit', resolve));
 
     // a recorded file arrives as fast as the script reads it
-    const total = 32 * 1024 * 1024;
+    const total = 48 * 1024 * 1024;
     const chunk = Buffer.alloc(64 * 1024, 0x47);
     let accepted = 0;
     const writing = (async () => {
@@ -194,12 +194,42 @@ test('reads no more input while it checks the audio layout, then passes all of i
     })();
 
     await new Promise(resolve => setTimeout(resolve, 2000));
-    // the 6 MiB probe window plus what the pipe and the stream buffers hold, not all 32 MiB
-    assert.ok(accepted < 12 * 1024 * 1024, `accepted ${accepted} bytes during the check`);
+    // the 16 MiB probe window plus what the pipe and the stream buffers hold, not all 48 MiB
+    assert.ok(accepted < 22 * 1024 * 1024, `accepted ${accepted} bytes during the check`);
 
     await writing;
     assert.strictEqual(await exited, 0);
     assert.strictEqual(fs.readFileSync(countFile, 'utf8').trim(), String(total));
+});
+
+/** The size of the probe window that streamEncode.js checks the audio of, for TS input that arrives at once */
+const probeWindowOf = async (t, context) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stream-encode-test-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const probedSizes = path.join(dir, 'sizes');
+    const { ffmpeg } = writeFakeTools(dir, { audioStreams: 1, probedSizes });
+
+    const child = spawn(process.execPath, [streamEncodeJs, context, 'mp4', '720p', ffmpeg], {
+        env: { ...process.env, TMPDIR: dir },
+    });
+    t.after(() => child.kill('SIGKILL'));
+    child.stdin.on('error', () => {}); // the script may exit before it reads everything
+    child.stdin.end(Buffer.alloc(40 * 1024 * 1024, 0x47));
+    assert.strictEqual(await new Promise(resolve => child.on('exit', resolve)), 0);
+
+    // the last probe is the stream count of audioTrackPlan, on the full window (an earlier one may see a part)
+    return Number(fs.readFileSync(probedSizes, 'utf8').trimEnd().split('\n').pop());
+};
+
+test('buffers 16 MiB of a recorded TS for the audio check, enough for the 5 s the dual-mono check decodes', { timeout: 10000 }, async t => {
+    // 5 s at BS's highest bitrate (about 24 Mbps) is 15 MB; the window ends with the chunk that fills it
+    const size = await probeWindowOf(t, 'recorded');
+    assert.ok(size >= 16 * 1024 * 1024 && size < 17 * 1024 * 1024, `probe window ${size} bytes`);
+});
+
+test('buffers at most 6 MiB of a live stream for the audio check', { timeout: 10000 }, async t => {
+    const size = await probeWindowOf(t, 'live');
+    assert.ok(size >= 6 * 1024 * 1024 && size < 7 * 1024 * 1024, `probe window ${size} bytes`);
 });
 
 test('refuses an unknown format', { timeout: 10000 }, async t => {

@@ -66,7 +66,8 @@ const getDuration = filePath => {
         Array.prototype.push.apply(args, ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda']);
     }
     if (!plan.filterComplex) {
-        // 判定 (先頭 5 秒) の後で二カ国語 (dual-mono) になっても主音声のみを出す。
+        // 判定区間 (先頭 5 秒の末尾 3 秒) の外にある二カ国語 (dual-mono) の部分 (先頭に残る前の番組の音声や、
+        // 後から始まる二カ国語) も主音声のみを出す。
         // channelsplit で両方を分ける場合は両チャンネルが必要なため付けない
         Array.prototype.push.apply(args, ['-dual_mono_mode', 'main']);
     }

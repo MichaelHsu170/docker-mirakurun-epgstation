@@ -221,8 +221,8 @@ test('probes 30 s of the input for streams in the stream count and the dual-mono
         const calls = fs.readFileSync(callLog, 'utf8').trimEnd().split('\n');
         const probeCalls = calls.filter(c => c.includes('-select_streams a') || c.includes('-v error -dual_mono_mode'));
         assert.deepStrictEqual(probeCalls.sort(), [
-            `ffmpeg -v error -dual_mono_mode main -analyzeduration 30M -probesize 200M -i ${env.INPUT} -map 0:a:0 -t 5 -f wav -`,
-            `ffmpeg -v error -dual_mono_mode sub -analyzeduration 30M -probesize 200M -i ${env.INPUT} -map 0:a:0 -t 5 -f wav -`,
+            `ffmpeg -v error -dual_mono_mode main -analyzeduration 30M -probesize 200M -i ${env.INPUT} -map 0:a:0 -t 5 -f s16le -ac 2 -ar 48000 -`,
+            `ffmpeg -v error -dual_mono_mode sub -analyzeduration 30M -probesize 200M -i ${env.INPUT} -map 0:a:0 -t 5 -f s16le -ac 2 -ar 48000 -`,
             `ffprobe -v error -analyzeduration 30M -probesize 200M -select_streams a -show_entries stream=index -of json ${env.INPUT}`,
         ]);
     } finally {
