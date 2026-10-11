@@ -34,3 +34,16 @@ test('live and recorded TS HLS commands map only video and the first audio strea
         assert.deepStrictEqual([...cmd.matchAll(/-map (\S+)/g)].map(m => m[1]), ['0:v', '0:a:0']);
     }
 });
+
+test('thumbnails are taken past the previous program at the start of a recording', () => {
+    // a program recording starts with up to 8 MiB of the previous program (45 s at 1.5 Mbps) plus the broadcaster's
+    // lag of up to 8.6 s (review D13-2: thumbnails at 5 s showed the previous program's promos and end cards)
+    const positions = fs
+        .readFileSync(configYml, 'utf8')
+        .split('\n')
+        .filter(line => line.startsWith('thumbnailPosition:'))
+        .map(line => Number(line.split(':')[1]));
+
+    assert.strictEqual(positions.length, 1);
+    assert.ok(positions[0] > 45 + 8.6, `thumbnailPosition ${positions[0]} is inside the lead-in`);
+});

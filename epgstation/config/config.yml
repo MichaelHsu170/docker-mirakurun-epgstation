@@ -31,7 +31,10 @@ recorded:
 
 thumbnail: '%ROOT%/thumbnail'
 thumbnailSize: 480x270
-thumbnailPosition: 5
+# 録画の先頭には前の番組が入る (実測 5-19 秒、低ビットレートでは最大約 53 秒: scripts/lib/audioTrackPlan.js の
+# DUAL_MONO_JUDGE_START) ため、番組の中の 60 秒目を使う。60 秒より短い録画にはサムネイルが作られない
+# (ffmpeg がフレームなしで失敗し、system.log に create thumbnail cmd error が出る)
+thumbnailPosition: 60
 
 ffmpeg: /usr/local/bin/ffmpeg
 ffprobe: /usr/local/bin/ffprobe
