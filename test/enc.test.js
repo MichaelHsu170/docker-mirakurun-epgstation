@@ -142,6 +142,22 @@ test('reports progress from ffmpeg 9 progress lines (KiB sizes)', () => {
     assert.strictEqual(progress[0].percent, 0.5);
 });
 
+test('reports progress from the lines of ffmpeg 9 with the caption input\'s video, which adds its own q', () => {
+    // two lines of a real run (enc.js gpu, テレ東 09:15): the null output's video copy adds q=-1.0, and Lq=-1.0 on the last line
+    const result = runEncResult(
+        "printf '%s\\r' 'frame= 7976 fps=431 q=21.0 q=-1.0 size=   66304KiB time=00:04:27.73 bitrate=2028.8kbits/s speed=14.5x elapsed=0:00:18.50    ' >&2; " +
+            "printf '%s\\n' 'frame= 8211 fps=432 q=23.0 Lq=-1.0 size=   69183KiB time=00:04:34.70 bitrate=2063.1kbits/s speed=14.4x elapsed=0:00:19.01' >&2",
+        { inputDuration: '549.4', outputDuration: '549.4' },
+    );
+
+    const progress = progressOf(result);
+    assert.deepStrictEqual(
+        progress.map(p => p.log.match(/time=\S+/)[0]),
+        ['time=00:04:27.73', 'time=00:04:34.70'],
+    );
+    assert.strictEqual(progress[1].percent, 0.5);
+});
+
 test('forwards ffmpeg messages that follow a progress line in the same output, and reports every progress line', () => {
     const output =
         `${progressLine('00:00:10.00')}\\r[mpegts @ 0x55] Packet corrupt (stream = 0, dts = 1)\\n` +
@@ -178,12 +194,14 @@ test('splits dual-mono audio into a Japanese and an English track', () => {
 
         const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
         assert.deepStrictEqual(args, [
-            '-y', '-fix_sub_duration', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
+            '-y', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
+            '-fix_sub_duration', '-isync', '0', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
             '-filter_complex',
             '[0:a:0]channelsplit=channel_layout=stereo[FL0][FR0];[FL0]aformat=channel_layouts=mono[FL];[FR0]aformat=channel_layouts=mono[FR]',
             '-map', '0:v', '-c:v', 'libx264', '-vf', 'yadif',
             '-map', '[FL]', '-map', '[FR]', '-c:a', 'aac', '-metadata:s:a:0', 'language=jpn', '-metadata:s:a:1', 'language=eng',
-            '-map', '0:s?', '-c:s', 'srt', '-preset', 'veryfast', '-crf', '26', env.OUTPUT,
+            '-map', '1:s?', '-c:s', 'srt', '-preset', 'veryfast', '-crf', '26', env.OUTPUT,
+            '-map', '1:v', '-c', 'copy', '-f', 'null', '-',
         ]);
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -226,10 +244,12 @@ test('decodes only the main language when the audio becomes dual-mono after the 
 
         const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
         assert.deepStrictEqual(args, [
-            '-y', '-fix_sub_duration', '-dual_mono_mode', 'main', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
+            '-y', '-dual_mono_mode', 'main', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
+            '-fix_sub_duration', '-isync', '0', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
             '-map', '0:v', '-c:v', 'libx264', '-vf', 'yadif',
             '-map', '0:a', '-c:a', 'aac',
-            '-map', '0:s?', '-c:s', 'srt', '-preset', 'veryfast', '-crf', '26', env.OUTPUT,
+            '-map', '1:s?', '-c:s', 'srt', '-preset', 'veryfast', '-crf', '26', env.OUTPUT,
+            '-map', '1:v', '-c', 'copy', '-f', 'null', '-',
         ]);
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -272,7 +292,7 @@ test('encodes only the program\'s audio stream when a 2nd one is only in the lea
         assert.strictEqual(spawnSync(process.execPath, [encJs, 'cpu'], { env }).status, 0);
 
         const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
-        assert.deepStrictEqual(args.slice(args.indexOf('yadif') + 1, args.indexOf('0:s?') - 1), ['-map', '0:a:0', '-c:a', 'aac']);
+        assert.deepStrictEqual(args.slice(args.indexOf('yadif') + 1, args.indexOf('1:s?') - 1), ['-map', '0:a:0', '-c:a', 'aac']);
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -313,6 +333,33 @@ test('compares the audio with the output, which ffmpeg shortened by the closed-u
     const tools = { audioStreams: 1, inputDuration: '79.342066', outputDuration: '69.169' };
     assert.strictEqual(runEnc(`${discontinuities(-10176000)}exit 0`, { ...tools, outputAudioDuration: '00:01:09.100000000' }), 0);
     assert.strictEqual(runEnc(`${discontinuities(-10176000)}exit 0`, { ...tools, outputAudioDuration: '00:01:04.000000000' }), 1);
+});
+
+/**
+ * A fake ffmpeg (sh) for a recording whose only caption is the previous program's, in its first seconds (NHK's
+ * caption-less programs, review D14-1). It writes the output's audio length as ffmpeg 9 makes it: -fix_sub_duration
+ * holds that caption until the input ends, and while it is held ffmpeg 9 stops the other streams of the input the
+ * caption comes from, so when that input is also the audio's (input 0) the output gets 0.063 s of audio (production:
+ * 0.063-0.191 s; or ffmpeg reads the whole recording into memory first). From an input of its own, the caption holds
+ * up only that input, and the audio is complete (60 min).
+ */
+const leadInCaptionOnly =
+    'n=0; fix=; sub=; next=; prev=\n' +
+    'for a; do\n' +
+    '  [ "$a" = -fix_sub_duration ] && next=1\n' +
+    '  if [ "$prev" = -i ]; then [ -n "$next" ] && fix=$n; next=; n=$((n + 1)); fi\n' +
+    '  case "$prev $a" in "-map "*:s*) sub=${a%%:*};; esac\n' +
+    '  prev=$a\n' +
+    'done\n' +
+    'if [ "$fix" = 0 ] && [ "$sub" = 0 ]; then a=00:00:00.063000000; else a=01:00:00.000000000; fi\n' +
+    'printf %s "$a" > "$OUTPUT"';
+
+test('encodes a recording whose only caption is the previous program\'s with all its audio', () => {
+    // recorded.id 2203 (review D14-1): 60 min, one caption at 5 s
+    const result = runEncResult(leadInCaptionOnly, { audioStreams: 1, inputDuration: '3600.597', outputDuration: '3600.597' });
+
+    assert.strictEqual(result.status, 0, String(result.stderr));
+    assert.doesNotMatch(String(result.stderr), /^enc\.js: the first audio track/m);
 });
 
 test('fails when the audio duration of the output cannot be read', () => {

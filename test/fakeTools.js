@@ -8,7 +8,8 @@ const path = require('path');
  *   numbered consecutively in a broadcast: 1 and 11 in review D13-1's NHK BS capture), and a duration of
  *   outputDuration for a .mkv (enc.js's output) and inputDuration for any other file; a duration of 'fail' makes it
  *   fail. For a .mkv its streams carry the DURATION tag outputAudioDuration, as the Matroska muxer writes it for each
- *   track (the end of the track's last packet). It answers after probeSeconds seconds.
+ *   track (the end of the track's last packet), or the content of the .mkv when the fake ffmpeg wrote one (an
+ *   ffmpegScript that models how long ffmpeg's audio output is). It answers after probeSeconds seconds.
  *   With -read_intervals +<start>%+<seconds> it prints the audio packets (packet=stream_index, csv) in that part of
  *   the input as the real ffprobe does: one "<index>," line per packet (3 here) for every audio stream with packets
  *   there. audioPackets gives each audio stream's [from, to] seconds with packets (a 2nd audio stream of the previous
@@ -43,7 +44,8 @@ const writeFakeTools = (
     const logCall = name => (callLog ? `echo "${name} $*" >> '${callLog}'\n` : '');
     const indexes = Array.from({ length: audioStreams }, (_, i) => i * 10 + 1);
     const streams = JSON.stringify(indexes.map(index => ({ index })));
-    const mkvStreams = JSON.stringify(indexes.map(index => ({ index, tags: { DURATION: outputAudioDuration } })));
+    // @D@: the DURATION tag, filled in by ffprobe
+    const mkvStreams = JSON.stringify(indexes.map(index => ({ index, tags: { DURATION: '@D@' } })));
     // "<index> <from> <to>" for every audio stream
     const packets = indexes.map((index, i) => `${index} ${audioPackets ? audioPackets[i].join(' ') : '0 1e9'}`).join('\\n');
     const ffprobe = path.join(dir, 'ffprobe');
@@ -55,7 +57,8 @@ const writeFakeTools = (
             `  printf '${packets}\\n' | awk -v ri="$ri" '{ split(ri, p, "%"); s = substr(p[1], 2) + 0; e = s + substr(p[2], 2); ` +
             'if ($2 < e && $3 > s) for (k = 0; k < 3; k++) print $1 "," }\'\n' +
             '  exit 0\nfi\n' +
-            `case "$last" in *.mkv) d='${outputDuration}'; st='${mkvStreams}';; *) d='${inputDuration}'; st='${streams}';; esac\n` +
+            `case "$last" in *.mkv) d='${outputDuration}'; a='${outputAudioDuration}'; [ -s "$last" ] && a=$(cat "$last"); ` +
+            `st=$(printf '%s' '${mkvStreams}' | sed "s/@D@/$a/g");; *) d='${inputDuration}'; st='${streams}';; esac\n` +
             '[ "$d" = fail ] && exit 1\n' +
             `printf '%s\\n' '{"format":{"duration":"'"$d"'"},"streams":'"$st"'}'\n`,
         { mode: 0o755 },
