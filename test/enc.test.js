@@ -200,6 +200,7 @@ test('splits a dual-mono recording that starts with 19.2 s of the previous progr
             dualMono: [[19.2, false], [231.8, true]],
             inputDuration: '251',
             outputDuration: '251',
+            outputAudioDuration: '00:04:11.000000000',
         });
 
         assert.strictEqual(spawnSync(process.execPath, [encJs, 'cpu'], { env }).status, 0);
@@ -244,11 +245,96 @@ test('probes 30 s of the input for streams in the stream count and the dual-mono
         assert.strictEqual(spawnSync(process.execPath, [encJs, 'cpu'], { env }).status, 0);
 
         const calls = fs.readFileSync(callLog, 'utf8').trimEnd().split('\n');
-        const probeCalls = calls.filter(c => c.includes('-select_streams a') || c.includes('-v error -dual_mono_mode'));
+        const probeCalls = calls.filter(c => c.includes('-select_streams a ') || c.includes('-v error -dual_mono_mode'));
         assert.deepStrictEqual(probeCalls.sort(), [
             `ffmpeg -v error -dual_mono_mode main -analyzeduration 30M -probesize 200M -ss 60 -i ${env.INPUT} -map 0:a:0 -t 5 -f s16le -`,
             `ffmpeg -v error -dual_mono_mode sub -analyzeduration 30M -probesize 200M -ss 60 -i ${env.INPUT} -map 0:a:0 -t 5 -f s16le -`,
             `ffprobe -v error -analyzeduration 30M -probesize 200M -select_streams a -show_entries stream=index -of json ${env.INPUT}`,
+        ]);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('encodes only the program\'s audio stream when a 2nd one is only in the lead-in', () => {
+    // テレ東 09:15 (review D13-1): the previous program's 2nd audio stream has packets until 5.16 s of 275 s
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'enc-test-'));
+    try {
+        const argsFile = path.join(dir, 'args');
+        const env = writeFakes(dir, `printf '%s\\n' "$@" > '${argsFile}'`, {
+            audioStreams: 2,
+            audioPackets: [[0, 274.8], [0, 5.16]],
+            inputDuration: '274.791789',
+            outputDuration: '274.8',
+            outputAudioDuration: '00:04:34.325000000',
+        });
+
+        assert.strictEqual(spawnSync(process.execPath, [encJs, 'cpu'], { env }).status, 0);
+
+        const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
+        assert.deepStrictEqual(args.slice(args.indexOf('yadif') + 1, args.indexOf('0:s?') - 1), ['-map', '0:a:0', '-c:a', 'aac']);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('fails when the first audio track of the output ends more than 5 s before the output', () => {
+    // recorded.id 2205 (review D13-3): 8.426 s of audio in a 3545.742 s output
+    const result = runEncResult('exit 0', {
+        audioStreams: 1,
+        inputDuration: '3546.1',
+        outputDuration: '3545.742',
+        outputAudioDuration: '00:00:08.426000000',
+    });
+
+    assert.strictEqual(result.status, 1);
+    assert.match(
+        String(result.stderr),
+        /^enc\.js: the first audio track is 8\.426s, the output is 3545\.742s: treating the encode as failed$/m,
+    );
+    assert.strictEqual(runEnc('exit 0', { audioStreams: 1, outputAudioDuration: '00:01:34.900000000' }), 1);
+});
+
+test('exits 0 when the first audio track of the output ends at most 5 s before the output', () => {
+    assert.strictEqual(runEnc('exit 0', { audioStreams: 1, outputAudioDuration: '00:01:35.000000000' }), 0);
+    // recorded.id 2211, the largest difference of the 40 complete encodes (0.388 s)
+    assert.strictEqual(
+        runEnc('exit 0', { audioStreams: 1, inputDuration: '3591', outputDuration: '3590.787', outputAudioDuration: '00:59:50.399000000' }),
+        0,
+    );
+    // 1 h of audio
+    assert.strictEqual(
+        runEnc('exit 0', { audioStreams: 1, inputDuration: '3600', outputDuration: '3600.2', outputAudioDuration: '01:00:00.000000000' }),
+        0,
+    );
+});
+
+test('compares the audio with the output, which ffmpeg shortened by the closed-up gaps as well', () => {
+    const tools = { audioStreams: 1, inputDuration: '79.342066', outputDuration: '69.169' };
+    assert.strictEqual(runEnc(`${discontinuities(-10176000)}exit 0`, { ...tools, outputAudioDuration: '00:01:09.100000000' }), 0);
+    assert.strictEqual(runEnc(`${discontinuities(-10176000)}exit 0`, { ...tools, outputAudioDuration: '00:01:04.000000000' }), 1);
+});
+
+test('fails when the audio duration of the output cannot be read', () => {
+    assert.strictEqual(runEnc('exit 0', { audioStreams: 1, outputAudioDuration: 'N/A' }), 1);
+});
+
+test('does not check the audio of an output without audio', () => {
+    // the fake output has no audio stream either: reading its audio duration would fail
+    assert.strictEqual(runEnc('exit 0', { audioStreams: 0 }), 0);
+});
+
+test('probes 30 s of the input for streams in the probe for the program\'s audio streams, 60 s in', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'enc-test-'));
+    try {
+        const callLog = path.join(dir, 'calls');
+        const env = writeFakes(dir, 'exit 0', { audioStreams: 2, callLog });
+
+        assert.strictEqual(spawnSync(process.execPath, [encJs, 'cpu'], { env }).status, 0);
+
+        const calls = fs.readFileSync(callLog, 'utf8').trimEnd().split('\n');
+        assert.deepStrictEqual(calls.filter(c => c.includes('-read_intervals')), [
+            `ffprobe -v error -analyzeduration 30M -probesize 200M -read_intervals +60%+5 -select_streams a -show_entries packet=stream_index -of csv=p=0 ${env.INPUT}`,
         ]);
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });

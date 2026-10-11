@@ -108,9 +108,91 @@ test('maps every audio stream when there are several, without checking for dual 
     });
 });
 
+// a program recording that follows a program with two audio streams starts with both, and the 2nd one leaves the PMT
+// with the previous program (review D13-1: テレ東 09:15, 2nd stream's packets until 5.16 s of 275 s)
+test('maps only the audio stream that the program has when a 2nd one is only in the lead-in', async t => {
+    assert.deepStrictEqual(
+        await plan(t, { audioStreams: 2, audioPackets: [[0, 275], [0, 5.16]], dualMono: false }, [], false, 275),
+        { filterComplex: null, audioMapArgs: ['-map', '0:a:0'], trackCount: 1 },
+    );
+});
+
+test('splits a dual-mono program recorded after a program with two audio streams', async t => {
+    assert.deepStrictEqual(
+        await plan(t, { audioStreams: 2, audioPackets: [[0, 300], [0, 5]], dualMono: [[5, false], [295, true]] }, [], false, 300),
+        SPLIT,
+    );
+});
+
+test('maps and judges the program\'s audio stream when it is not the first one', async t => {
+    const tools = { audioStreams: 2, audioPackets: [[0, 5], [4, 300]] };
+    assert.deepStrictEqual(await plan(t, { ...tools, dualMono: false }, [], false, 300), {
+        filterComplex: null,
+        audioMapArgs: ['-map', '0:a:1'],
+        trackCount: 1,
+    });
+    assert.deepStrictEqual(await plan(t, { ...tools, dualMono: true }, [], false, 300), {
+        ...SPLIT,
+        filterComplex: SPLIT.filterComplex.replace('[0:a:0]', '[0:a:1]'),
+    });
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audio-track-plan-test-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const callLog = path.join(dir, 'calls');
+    const { ffmpeg, ffprobe } = writeFakeTools(dir, { ...tools, callLog });
+    await audioTrackPlan(ffprobe, ffmpeg, 'in.m2ts', [], false, 300);
+    assert.deepStrictEqual(fs.readFileSync(callLog, 'utf8').trimEnd().split('\n').sort(), [
+        'ffmpeg -v error -dual_mono_mode main -ss 60 -i in.m2ts -map 0:a:1 -t 5 -f s16le -',
+        'ffmpeg -v error -dual_mono_mode sub -ss 60 -i in.m2ts -map 0:a:1 -t 5 -f s16le -',
+        'ffprobe -v error -read_intervals +60%+5 -select_streams a -show_entries packet=stream_index -of csv=p=0 in.m2ts',
+        'ffprobe -v error -select_streams a -show_entries stream=index -of json in.m2ts',
+    ]);
+});
+
+test('maps every audio stream that the program has', async t => {
+    // a failing dual-mono check would reject: it must not run
+    assert.deepStrictEqual(await plan(t, { audioStreams: 2, dualMono: 'fail' }, [], false, 300), {
+        filterComplex: null,
+        audioMapArgs: ['-map', '0:a'],
+        trackCount: 2,
+    });
+    assert.deepStrictEqual(
+        await plan(t, { audioStreams: 3, audioPackets: [[0, 300], [0, 5], [0, 300]], dualMono: 'fail' }, [], false, 300),
+        { filterComplex: null, audioMapArgs: ['-map', '0:a:0', '-map', '0:a:2'], trackCount: 2 },
+    );
+});
+
+test('looks for the program\'s audio streams on the 5 s from 60 s in, or the last 5 s of a shorter recording', async t => {
+    const leadIn = (seconds, duration) =>
+        plan(t, { audioStreams: 2, audioPackets: [[0, duration], [0, seconds]], dualMono: false }, [], false, duration);
+    const ONE = { filterComplex: null, audioMapArgs: ['-map', '0:a:0'], trackCount: 1 };
+    const BOTH = { filterComplex: null, audioMapArgs: ['-map', '0:a'], trackCount: 2 };
+    // a 2nd stream that ends inside the window is the program's
+    assert.deepStrictEqual(await leadIn(59, 300), ONE);
+    assert.deepStrictEqual(await leadIn(61, 300), BOTH);
+    assert.deepStrictEqual(await leadIn(19, 30), ONE);
+    assert.deepStrictEqual(await leadIn(26, 30), BOTH);
+    // a recording of 5 s or less, or of unknown length, keeps every stream
+    assert.deepStrictEqual(await leadIn(2, 5), BOTH);
+    assert.deepStrictEqual(await leadIn(2, NaN), BOTH);
+});
+
+test('maps every audio stream when none has packets where the program is looked for', async t => {
+    assert.deepStrictEqual(
+        await plan(t, { audioStreams: 2, audioPackets: [[0, 50], [0, 50]], dualMono: 'fail' }, [], false, 300),
+        { filterComplex: null, audioMapArgs: ['-map', '0:a'], trackCount: 2 },
+    );
+});
+
 test('maps only the first of several audio streams for a stream, without checking for dual mono', async t => {
     // a 2nd audio stream that leaves the PMT mid-program stalls every output of ffmpeg 9
     assert.deepStrictEqual(await plan(t, { audioStreams: 2, dualMono: 'fail' }, [], true), {
+        filterComplex: null,
+        audioMapArgs: ['-map', '0:a:0'],
+        trackCount: 1,
+    });
+    // also with a known length and a first stream that is only in the lead-in
+    assert.deepStrictEqual(await plan(t, { audioStreams: 2, audioPackets: [[0, 5], [0, 300]], dualMono: 'fail' }, [], true, 300), {
         filterComplex: null,
         audioMapArgs: ['-map', '0:a:0'],
         trackCount: 1,
@@ -173,6 +255,19 @@ test('seeks the dual-mono decodes, after the input options, to 60 s or to 5 s be
     assert.deepStrictEqual((await callsOf(t, [], 4)).slice(0, 2), [
         'ffmpeg -v error -dual_mono_mode main -i in.m2ts -map 0:a:0 -t 5 -f s16le -',
         'ffmpeg -v error -dual_mono_mode sub -i in.m2ts -map 0:a:0 -t 5 -f s16le -',
+    ]);
+});
+
+test('puts the input options before the input in the probe for the program\'s audio streams', async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audio-track-plan-test-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const callLog = path.join(dir, 'calls');
+    const { ffmpeg, ffprobe } = writeFakeTools(dir, { audioStreams: 2, callLog });
+    await audioTrackPlan(ffprobe, ffmpeg, 'in.m2ts', ['-analyzeduration', '7M'], false, 30.5);
+
+    assert.deepStrictEqual(fs.readFileSync(callLog, 'utf8').trimEnd().split('\n'), [
+        'ffprobe -v error -analyzeduration 7M -select_streams a -show_entries stream=index -of json in.m2ts',
+        'ffprobe -v error -analyzeduration 7M -read_intervals +25.5%+5 -select_streams a -show_entries packet=stream_index -of csv=p=0 in.m2ts',
     ]);
 });
 

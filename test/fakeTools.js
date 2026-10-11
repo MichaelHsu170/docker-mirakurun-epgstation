@@ -4,9 +4,15 @@ const path = require('path');
 /**
  * Writes a fake ffprobe and a fake ffmpeg into dir (ffprobe next to ffmpeg, where streamEncode.js looks
  * for it).
- * - ffprobe reports audioStreams audio streams, and a duration of outputDuration for a .mkv (enc.js's
- *   output) and inputDuration for any other file; a duration of 'fail' makes it fail. It answers after
- *   probeSeconds seconds.
+ * - ffprobe reports audioStreams audio streams, with the stream indexes 1, 11, 21, ... (audio streams are not
+ *   numbered consecutively in a broadcast: 1 and 11 in review D13-1's NHK BS capture), and a duration of
+ *   outputDuration for a .mkv (enc.js's output) and inputDuration for any other file; a duration of 'fail' makes it
+ *   fail. For a .mkv its streams carry the DURATION tag outputAudioDuration, as the Matroska muxer writes it for each
+ *   track (the end of the track's last packet). It answers after probeSeconds seconds.
+ *   With -read_intervals +<start>%+<seconds> it prints the audio packets (packet=stream_index, csv) in that part of
+ *   the input as the real ffprobe does: one "<index>," line per packet (3 here) for every audio stream with packets
+ *   there. audioPackets gives each audio stream's [from, to] seconds with packets (a 2nd audio stream of the previous
+ *   program only in the recording's lead-in: [0, 5]); without it every stream has packets throughout.
  * - ffmpeg answers the dual-mono check (-v error -dual_mono_mode main/sub) as the real ffmpeg does with the
  *   arguments that check gives ([-ss <seconds>] -i ... -t <seconds> -f s16le): it writes the audio from the -ss
  *   position (0 without it) for the -t seconds or to the end of the audio, whichever comes first, as 192000 bytes of
@@ -28,20 +34,30 @@ const writeFakeTools = (
         audioStreams = 0,
         dualMono = false,
         probeSeconds = 0,
+        audioPackets = null,
+        outputAudioDuration = '00:01:40.000000000',
         callLog = null,
         probedSizes = null,
     } = {},
 ) => {
     const logCall = name => (callLog ? `echo "${name} $*" >> '${callLog}'\n` : '');
-    const streams = JSON.stringify(Array.from({ length: audioStreams }, (_, i) => ({ index: i + 1 })));
+    const indexes = Array.from({ length: audioStreams }, (_, i) => i * 10 + 1);
+    const streams = JSON.stringify(indexes.map(index => ({ index })));
+    const mkvStreams = JSON.stringify(indexes.map(index => ({ index, tags: { DURATION: outputAudioDuration } })));
+    // "<index> <from> <to>" for every audio stream
+    const packets = indexes.map((index, i) => `${index} ${audioPackets ? audioPackets[i].join(' ') : '0 1e9'}`).join('\\n');
     const ffprobe = path.join(dir, 'ffprobe');
     fs.writeFileSync(
         ffprobe,
-        `#!/bin/sh\n${logCall('ffprobe')}sleep ${probeSeconds}\nfor a; do last="$a"; done\n` +
+        `#!/bin/sh\n${logCall('ffprobe')}sleep ${probeSeconds}\nri=; prev=; for a; do [ "$prev" = -read_intervals ] && ri="$a"; prev="$a"; last="$a"; done\n` +
             (probedSizes ? `stat -c %s "$last" >> '${probedSizes}'\n` : '') +
-            `case "$last" in *.mkv) d='${outputDuration}';; *) d='${inputDuration}';; esac\n` +
+            'if [ -n "$ri" ]; then\n' +
+            `  printf '${packets}\\n' | awk -v ri="$ri" '{ split(ri, p, "%"); s = substr(p[1], 2) + 0; e = s + substr(p[2], 2); ` +
+            'if ($2 < e && $3 > s) for (k = 0; k < 3; k++) print $1 "," }\'\n' +
+            '  exit 0\nfi\n' +
+            `case "$last" in *.mkv) d='${outputDuration}'; st='${mkvStreams}';; *) d='${inputDuration}'; st='${streams}';; esac\n` +
             '[ "$d" = fail ] && exit 1\n' +
-            `printf '%s\\n' '{"format":{"duration":"'"$d"'"},"streams":${streams}}'\n`,
+            `printf '%s\\n' '{"format":{"duration":"'"$d"'"},"streams":'"$st"'}'\n`,
         { mode: 0o755 },
     );
     const parts = dualMono === true ? [[100, true]] : dualMono === false ? [[100, false]] : dualMono;

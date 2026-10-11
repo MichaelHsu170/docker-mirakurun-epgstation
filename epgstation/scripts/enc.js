@@ -12,7 +12,10 @@ const output = process.env.OUTPUT;
 const USE_GPU = process.argv[2] !== 'cpu';
 
 // 出力が入力よりこの秒数を超えて短ければエンコード失敗とする (正常なエンコードでも先頭のキーフレーム
-// までの分などで数秒は短くなるため、割合ではなく秒数で判定する)
+// までの分などで数秒は短くなるため、割合ではなく秒数で判定する)。
+// 出力の最初の音声トラックが出力よりこの秒数を超えて早く終わる場合も失敗とする (番組の音声が map されず、
+// 音声が先頭の数秒しかない出力。実測で正常なエンコードの差は 0.5 秒以下、音声のない出力は 3400 秒以上)。
+// 無音の部分にも音声のパケットはあり、タイムスタンプの飛びを詰めた分は映像と音声の両方から詰められるため差にならない
 const MAX_MISSING_SECONDS = 5;
 
 // ストリーム検出の入力オプション。既定 (5 MB, BS で約 2 秒分) では、PMT にあってもデータの始まりが遅い
@@ -26,6 +29,31 @@ const PROBE_ARGS = ['-analyzeduration', '30M', '-probesize', '200M'];
 // "new offset= N" は入力全体の累積のずれ (µs) で、負の値の分だけ出力は入力より短くなる。
 // 例: [aist#0:3/aac @ 0x5f...] timestamp discontinuity (stream id=273): 10176000, new offset= -10176000
 const DISCONTINUITY_REG = /timestamp discontinuity .*new offset= (-?\d+)/;
+
+/**
+ * 出力 (mkv) の最初の音声トラックの長さ (Matroska の DURATION タグ: そのトラックの最後のパケットの終わり)
+ * @param {string} filePath ファイルパス
+ * @return {Promise<number>} 秒
+ */
+const getAudioDuration = filePath => {
+    return new Promise((resolve, reject) => {
+        execFile(ffprobe, ['-v', '0', '-select_streams', 'a:0', '-show_entries', 'stream_tags=DURATION', '-of', 'json', filePath], (err, stdout) => {
+            if (err) {
+                reject(err);
+
+                return;
+            }
+
+            try {
+                // 例: "00:59:50.399000000"
+                const tag = JSON.parse(stdout).streams[0].tags.DURATION.match(/^(\d+):(\d+):(\d+(?:\.\d+)?)$/);
+                resolve(parseInt(tag[1], 10) * 3600 + parseInt(tag[2], 10) * 60 + parseFloat(tag[3]));
+            } catch (err) {
+                reject(err);
+            }
+        });
+    });
+};
 
 /**
  * 動画長取得関数
@@ -56,7 +84,8 @@ const getDuration = filePath => {
     const duration = await getDuration(input);
     // 音声ストリーム構成 (実ストリーム数・二カ国語判定) を実際にデコードして判定する。
     // EPG由来のメタデータ (AUDIOCOMPONENTTYPE) は誤りや欠落があり得るため信頼しない。
-    // 二カ国語は先頭 (前の番組の音声が入る) ではなく番組の中の音声で判定する (audioTrackPlan.js の DUAL_MONO_JUDGE_START)
+    // 二カ国語と map する音声ストリームは先頭 (前の番組の音声が入る) ではなく番組の中の音声で判定する
+    // (audioTrackPlan.js の DUAL_MONO_JUDGE_START)
     const plan = await audioTrackPlan(ffprobe, ffmpeg, input, PROBE_ARGS, false, duration);
 
     const args = ['-y'];
@@ -244,7 +273,7 @@ const getDuration = filePath => {
         // 成功扱いにすると元ファイルが削除されて欠落部分が失われるため、出力が入力より
         // MAX_MISSING_SECONDS 秒を超えて短ければ失敗として返す。ただし ffmpeg がタイムスタンプの飛びを
         // 詰めた時間 (DISCONTINUITY_REG) は入力にデータがなく失われないため、その分も短くてよい。
-        // 入力の長さが分からない場合は判定しない
+        // 入力の長さが分からない場合は判定しない (音声の長さも)
         if (!Number.isFinite(duration) || duration <= 0) {
             console.error(`enc.js: input duration is unknown (${duration}): not checking the output duration`);
             return;
@@ -257,13 +286,25 @@ const getDuration = filePath => {
                     `enc.js: output is ${outputDuration}s, input is ${duration}s, of which ffmpeg closed up ${closedSeconds}s of timestamp gaps: treating the encode as failed`,
                 );
                 process.exitCode = 1;
-            } else if (!(outputDuration >= duration - MAX_MISSING_SECONDS)) {
+                return;
+            }
+            if (!(outputDuration >= duration - MAX_MISSING_SECONDS)) {
                 console.error(
                     `enc.js: output is ${outputDuration}s, input is ${duration}s: ffmpeg closed up ${closedSeconds}s of timestamp gaps (no data in the input), so the output is complete`,
                 );
             }
+            // 音声が途中で途切れた出力も成功扱いにすると元ファイルが削除されて音声が失われる
+            if (plan.trackCount > 0) {
+                const audioDuration = await getAudioDuration(output);
+                if (!(audioDuration >= outputDuration - MAX_MISSING_SECONDS)) {
+                    console.error(
+                        `enc.js: the first audio track is ${audioDuration}s, the output is ${outputDuration}s: treating the encode as failed`,
+                    );
+                    process.exitCode = 1;
+                }
+            }
         } catch (err) {
-            console.error('enc.js: cannot read the output duration:', err);
+            console.error('enc.js: cannot read the output duration or its audio duration:', err);
             process.exitCode = 1;
         }
     });
