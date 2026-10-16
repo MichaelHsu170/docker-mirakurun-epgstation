@@ -1,4 +1,7 @@
 port: 8888
+# the web client is used through Apache's tv site (port 80), not on :8888 directly: it opens its socket.io
+# live-update connection there (apache_www/conf/apache/sites-available/tv.xuduo822.conf proxies it)
+clientSocketioPort: 80
 mirakurunPath: http://mirakurun:40772/
 
 # dbtype: sqlite
