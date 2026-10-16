@@ -24,6 +24,12 @@ const MAX_MISSING_SECONDS = 5;
 // 約 24 Mbps でも 60 秒分以上あり、30 秒より先に打ち切られない)
 const PROBE_ARGS = ['-analyzeduration', '30M', '-probesize', '200M'];
 
+// 1つ目の入力 (映像と音声) を読む速さの上限 (再生速度の 12 倍)。ffmpeg 9 は1つの入力の映像と音声を実時間より
+// 速くデコードすると、エンコードに使われる前に読んだ分をメモリに溜め、番組の長さに比例して増える (1 時間あたり
+// 約 2.3-2.7 GB、3 時間の番組で 7.3 GB)。エンコードの速さ (GPU で 10-14 倍速) 程度で読めば溜まらない (1 GB 未満)。
+// 代わりに GPU のエンコードは 2 割強遅くなる。字幕用の入力には付けない (字幕のない番組でその先読みが遅くならないように)
+const READRATE_ARGS = ['-readrate', '12'];
+
 // 字幕は同じ録画を2つ目の入力として開いて取る (映像と音声は1つ目の入力から)。
 // srcs/ffmpeg の字幕デコーダ (libaribb24) が付ける表示時間は次の字幕と重なるか、終わりがない (1193 時間) ため、
 // -fix_sub_duration で次の字幕の始まりまでとする。その間 ffmpeg は字幕を出力せずに持っており、出力の字幕
@@ -110,8 +116,8 @@ const getDuration = filePath => {
         // channelsplit で両方を分ける場合は両チャンネルが必要なため付けない
         Array.prototype.push.apply(args, ['-dual_mono_mode', 'main']);
     }
-    // input 設定
-    Array.prototype.push.apply(args, [...PROBE_ARGS, '-i', input]);
+    // input 設定 (読む速さの上限: READRATE_ARGS)
+    Array.prototype.push.apply(args, [...READRATE_ARGS, ...PROBE_ARGS, '-i', input]);
     // 字幕用 (同じ録画をもう一度、字幕だけのために開く: CAPTION_INPUT_ARGS)
     Array.prototype.push.apply(args, CAPTION_INPUT_ARGS);
     Array.prototype.push.apply(args, [...PROBE_ARGS, '-i', input]);

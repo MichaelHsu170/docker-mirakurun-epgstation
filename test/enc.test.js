@@ -193,8 +193,9 @@ test('splits dual-mono audio into a Japanese and an English track', () => {
         assert.strictEqual(spawnSync(process.execPath, [encJs, 'cpu'], { env }).status, 0);
 
         const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
+        // only the 1st input (video and audio) is read at most 12x real time, not the caption input
         assert.deepStrictEqual(args, [
-            '-y', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
+            '-y', '-readrate', '12', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
             '-fix_sub_duration', '-isync', '0', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
             '-filter_complex',
             '[0:a:0]channelsplit=channel_layout=stereo[FL0][FR0];[FL0]aformat=channel_layouts=mono[FL];[FR0]aformat=channel_layouts=mono[FR]',
@@ -244,7 +245,7 @@ test('decodes only the main language when the audio becomes dual-mono after the 
 
         const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
         assert.deepStrictEqual(args, [
-            '-y', '-dual_mono_mode', 'main', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
+            '-y', '-dual_mono_mode', 'main', '-readrate', '12', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
             '-fix_sub_duration', '-isync', '0', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
             '-map', '0:v', '-c:v', 'libx264', '-vf', 'yadif',
             '-map', '0:a', '-c:a', 'aac',
