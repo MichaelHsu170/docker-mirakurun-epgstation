@@ -5,7 +5,7 @@ const { execFile, spawn } = require('child_process');
 // 放送局の遅れ。実測で NHK BS 5.3 秒、ヒストリーチャンネル 19.2 秒) ため、先頭で判定すると前の番組の音声で決まる
 // (ステレオの後の二カ国語番組が主音声だけになり、二カ国語の後のステレオ番組が左右に分かれる)。60 秒は 8 MiB が 1.5 Mbps でも
 // 45 秒、それに遅れの実測の最大 8.6 秒を足しても収まる。それより短い録画は末尾の DUAL_MONO_DECODE_SECONDS 秒で判定する。
-// 長さの分からない入力 (ストリームの判定ウィンドウ) は先頭から判定する。
+// 長さの分からない入力 (ストリームの判定ウィンドウ) は先頭から判定する。番組の映像の大きさ (programVideoSize) も同じ区間で判定する。
 // 音声ストリームが2以上の録画は、同じ区間にパケットのあるストリームを番組の音声とする (前の番組の2本目の音声は
 // 前の番組の部分にしかなく、map すると番組の間は空のトラックになり、ffmpeg 9 はそれを待って入力をメモリに溜め続ける)
 const DUAL_MONO_JUDGE_START = 60;
@@ -46,8 +46,7 @@ async function audioTrackPlan(ffprobePath, ffmpegPath, inputPath, inputArgs = []
         return { filterComplex: null, audioMapArgs: [], trackCount: 0 };
     }
 
-    // 0 以下 (長さが分からない NaN も) なら先頭から判定する
-    const judgeStart = Math.min(DUAL_MONO_JUDGE_START, inputDuration - DUAL_MONO_DECODE_SECONDS);
+    const judgeStart = programJudgeStart(inputDuration);
 
     if (audioStreams >= 2 && !firstTrackOnly && judgeStart > 0) {
         const withPackets = await getAudioStreamsWithPackets(ffprobePath, inputPath, inputArgs, judgeStart);
@@ -75,6 +74,55 @@ async function audioTrackPlan(ffprobePath, ffmpegPath, inputPath, inputArgs = []
         audioMapArgs: ['-map', '[FL]', '-map', '[FR]'],
         trackCount: 2,
     };
+}
+
+/**
+ * 番組の中を判定する位置 (秒): DUAL_MONO_JUDGE_START、それより短い録画は末尾の DUAL_MONO_DECODE_SECONDS 秒の始まり。
+ * 0 以下 (長さが分からない NaN も) なら先頭から判定する
+ * @param {number} inputDuration 入力の長さ (秒)
+ * @return {number}
+ */
+function programJudgeStart(inputDuration) {
+    return Math.min(DUAL_MONO_JUDGE_START, inputDuration - DUAL_MONO_DECODE_SECONDS);
+}
+
+/**
+ * 番組の映像の大きさ: 音声と同じ判定区間 (programJudgeStart から DUAL_MONO_DECODE_SECONDS 秒) の最初のフレームの
+ * 幅、高さ、SAR。録画の先頭の前の番組の部分は、番組と大きさが違うことがある (1080i と 480i を切り替える NHK BS 102、
+ * tvk2 などのサブチャンネル)。
+ * read_intervals の + は入力の先頭からの位置 (付けないと放送のタイムスタンプそのものになる)
+ * @param {string} ffprobePath
+ * @param {string} inputPath
+ * @param {string[]} inputArgs 入力オプション
+ * @param {number} inputDuration 入力の長さ (秒)
+ * @return {Promise<{width: number, height: number, sar: string}|null>} sar は "4/3" の形。判定区間に
+ *   SAR の分かるフレームがなければ null
+ */
+function programVideoSize(ffprobePath, inputPath, inputArgs, inputDuration) {
+    const judgeStart = programJudgeStart(inputDuration);
+    return new Promise((resolve, reject) => {
+        execFile(
+            ffprobePath,
+            [
+                '-v', 'error',
+                ...inputArgs,
+                '-read_intervals', `+${judgeStart > 0 ? judgeStart : 0}%+${DUAL_MONO_DECODE_SECONDS}`,
+                '-select_streams', 'v:0',
+                '-show_entries', 'frame=width,height,sample_aspect_ratio',
+                '-of', 'csv=p=0',
+                inputPath,
+            ],
+            (err, stdout) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+                // 1フレーム1行 (例: "1440,1080,4:3,")。SAR の分からないフレームは "N/A"
+                const frame = stdout.match(/^(\d+),(\d+),([1-9]\d*):([1-9]\d*)/m);
+                resolve(frame === null ? null : { width: parseInt(frame[1], 10), height: parseInt(frame[2], 10), sar: `${frame[3]}/${frame[4]}` });
+            },
+        );
+    });
 }
 
 /**
@@ -204,4 +252,4 @@ function decodeAudio(ffmpegPath, inputPath, mode, inputArgs, judgeStart, track) 
     });
 }
 
-module.exports = { audioTrackPlan, getAudioStreamCount };
+module.exports = { audioTrackPlan, getAudioStreamCount, programVideoSize };

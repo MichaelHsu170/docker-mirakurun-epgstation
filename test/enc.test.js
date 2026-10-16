@@ -199,7 +199,7 @@ test('splits dual-mono audio into a Japanese and an English track', () => {
             '-fix_sub_duration', '-isync', '0', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
             '-filter_complex',
             '[0:a:0]channelsplit=channel_layout=stereo[FL0][FR0];[FL0]aformat=channel_layouts=mono[FL];[FR0]aformat=channel_layouts=mono[FR]',
-            '-map', '0:v', '-c:v', 'libx264', '-vf', 'yadif',
+            '-map', '0:v', '-c:v', 'libx264', '-vf', 'yadif,scale=1440:1080,setsar=4/3',
             '-map', '[FL]', '-map', '[FR]', '-c:a', 'aac', '-metadata:s:a:0', 'language=jpn', '-metadata:s:a:1', 'language=eng',
             '-map', '1:s?', '-c:s', 'srt', '-preset', 'veryfast', '-crf', '26', env.OUTPUT,
             '-map', '1:v', '-c', 'copy', '-f', 'null', '-',
@@ -247,7 +247,7 @@ test('decodes only the main language when the audio becomes dual-mono after the 
         assert.deepStrictEqual(args, [
             '-y', '-dual_mono_mode', 'main', '-readrate', '12', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
             '-fix_sub_duration', '-isync', '0', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
-            '-map', '0:v', '-c:v', 'libx264', '-vf', 'yadif',
+            '-map', '0:v', '-c:v', 'libx264', '-vf', 'yadif,scale=1440:1080,setsar=4/3',
             '-map', '0:a', '-c:a', 'aac',
             '-map', '1:s?', '-c:s', 'srt', '-preset', 'veryfast', '-crf', '26', env.OUTPUT,
             '-map', '1:v', '-c', 'copy', '-f', 'null', '-',
@@ -293,7 +293,7 @@ test('encodes only the program\'s audio stream when a 2nd one is only in the lea
         assert.strictEqual(spawnSync(process.execPath, [encJs, 'cpu'], { env }).status, 0);
 
         const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
-        assert.deepStrictEqual(args.slice(args.indexOf('yadif') + 1, args.indexOf('1:s?') - 1), ['-map', '0:a:0', '-c:a', 'aac']);
+        assert.deepStrictEqual(args.slice(args.indexOf('-vf') + 2, args.indexOf('1:s?') - 1), ['-map', '0:a:0', '-c:a', 'aac']);
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -381,12 +381,97 @@ test('probes 30 s of the input for streams in the probe for the program\'s audio
         assert.strictEqual(spawnSync(process.execPath, [encJs, 'cpu'], { env }).status, 0);
 
         const calls = fs.readFileSync(callLog, 'utf8').trimEnd().split('\n');
-        assert.deepStrictEqual(calls.filter(c => c.includes('-read_intervals')), [
+        assert.deepStrictEqual(calls.filter(c => c.includes('-read_intervals') && c.includes('-select_streams a ')), [
             `ffprobe -v error -analyzeduration 30M -probesize 200M -read_intervals +60%+5 -select_streams a -show_entries packet=stream_index -of csv=p=0 ${env.INPUT}`,
         ]);
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }
+});
+
+/**
+ * Runs enc.js in the given mode (gpu or cpu) with the fakes of writeFakes (tools) and an ffmpeg that records its
+ * arguments. Returns enc.js's exit code and the value of ffmpeg's -vf (null when ffmpeg did not run).
+ */
+const videoFilterOf = (mode, tools) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'enc-test-'));
+    try {
+        const argsFile = path.join(dir, 'args');
+        const env = writeFakes(dir, `printf '%s\\n' "$@" > '${argsFile}'`, tools);
+        const status = spawnSync(process.execPath, [encJs, mode], { env }).status;
+        if (!fs.existsSync(argsFile)) {
+            return { status, vf: null };
+        }
+        const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
+
+        return { status, vf: args[args.indexOf('-vf') + 1] };
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+};
+
+// a recording of a program in 480i (720x480, SAR 32:27) that starts with 15 s of the previous program in 1080i
+// (1440x1080, SAR 4:3), as on NHK BS 102 or tvk2 (review D17-1), and the other way round
+const HD_LEAD_IN = [[0, 15, '1440,1080,4:3'], [15, 1e9, '720,480,32:27']];
+const SD_LEAD_IN = [[0, 15, '720,480,32:27'], [15, 1e9, '1440,1080,4:3']];
+
+test('scales the GPU encode to the program\'s size and SAR when the lead-in has another size', () => {
+    assert.deepStrictEqual(videoFilterOf('gpu', { videoFrames: HD_LEAD_IN }), {
+        status: 0,
+        vf: 'yadif_cuda,hwdownload,format=nv12,scale=720:480,setsar=32/27',
+    });
+    assert.deepStrictEqual(videoFilterOf('gpu', { videoFrames: SD_LEAD_IN }), {
+        status: 0,
+        vf: 'yadif_cuda,hwdownload,format=nv12,scale=1440:1080,setsar=4/3',
+    });
+});
+
+test('scales the CPU encode to the program\'s size and SAR when the lead-in has another size', () => {
+    assert.deepStrictEqual(videoFilterOf('cpu', { videoFrames: HD_LEAD_IN }), { status: 0, vf: 'yadif,scale=720:480,setsar=32/27' });
+    assert.deepStrictEqual(videoFilterOf('cpu', { videoFrames: SD_LEAD_IN }), { status: 0, vf: 'yadif,scale=1440:1080,setsar=4/3' });
+});
+
+test('takes the program\'s size from the last 5 s of a recording shorter than 65 s', () => {
+    // 40 s: the program's size from 35 s in, past the 15 s lead-in
+    const tools = { inputDuration: '40', outputDuration: '40', videoFrames: HD_LEAD_IN };
+    assert.deepStrictEqual(videoFilterOf('cpu', tools), { status: 0, vf: 'yadif,scale=720:480,setsar=32/27' });
+});
+
+test('takes the size from the start of a recording of unknown duration', () => {
+    assert.deepStrictEqual(videoFilterOf('cpu', { inputDuration: 'N/A', videoFrames: HD_LEAD_IN }), {
+        status: 0,
+        vf: 'yadif,scale=1440:1080,setsar=4/3',
+    });
+});
+
+test('takes the program\'s size from the 5 s from 60 s in', () => {
+    // a lead-in longer than the 5-19 s seen so far: the size from 60 s in, not from 55 s in
+    assert.deepStrictEqual(videoFilterOf('cpu', { videoFrames: [[0, 59.9, '1440,1080,4:3'], [59.9, 1e9, '720,480,32:27']] }), {
+        status: 0,
+        vf: 'yadif,scale=720:480,setsar=32/27',
+    });
+    // the 5 s window ends at 65 s
+    assert.deepStrictEqual(videoFilterOf('cpu', { videoFrames: [[0, 65, '1440,1080,4:3'], [65, 1e9, '720,480,32:27']] }), {
+        status: 0,
+        vf: 'yadif,scale=1440:1080,setsar=4/3',
+    });
+});
+
+test('takes the size of the first frame whose SAR is known', () => {
+    assert.deepStrictEqual(
+        videoFilterOf('cpu', { videoFrames: [[60, 61, '1920,1080,N/A'], [61, 1e9, '1440,1080,4:3']] }),
+        { status: 0, vf: 'yadif,scale=1440:1080,setsar=4/3' },
+    );
+});
+
+test('deinterlaces without scaling when no video frame is found where the program\'s size is looked for', () => {
+    assert.deepStrictEqual(videoFilterOf('gpu', { videoFrames: [] }), { status: 0, vf: 'yadif_cuda' });
+    assert.deepStrictEqual(videoFilterOf('cpu', { videoFrames: [[0, 10, '720,480,32:27']] }), { status: 0, vf: 'yadif' });
+});
+
+test('fails without encoding when the probe for the program\'s size fails', () => {
+    // the TS is kept
+    assert.deepStrictEqual(videoFilterOf('gpu', { videoFrames: 'fail' }), { status: 1, vf: null });
 });
 
 test('cancelling stops ffmpeg even though EPGStation closes the output pipes first', async t => {

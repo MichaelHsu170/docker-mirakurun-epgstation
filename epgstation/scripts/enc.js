@@ -1,6 +1,6 @@
 const spawn = require('child_process').spawn;
 const execFile = require('child_process').execFile;
-const { audioTrackPlan } = require('./lib/audioTrackPlan.js');
+const { audioTrackPlan, programVideoSize } = require('./lib/audioTrackPlan.js');
 const ffmpeg = process.env.FFMPEG;
 const ffprobe = process.env.FFPROBE;
 
@@ -104,6 +104,8 @@ const getDuration = filePath => {
     // 二カ国語と map する音声ストリームは先頭 (前の番組の音声が入る) ではなく番組の中の音声で判定する
     // (audioTrackPlan.js の DUAL_MONO_JUDGE_START)
     const plan = await audioTrackPlan(ffprobe, ffmpeg, input, PROBE_ARGS, false, duration);
+    // 番組の映像の大きさ (先頭の前の番組の部分ではなく、二カ国語と同じく番組の中で判定する)
+    const videoSize = await programVideoSize(ffprobe, input, PROBE_ARGS, duration);
 
     const args = ['-y'];
     // NVidia GPU
@@ -128,7 +130,17 @@ const getDuration = filePath => {
     // ビデオストリーム設定
     Array.prototype.push.apply(args, ['-map', '0:v', '-c:v', USE_GPU ? 'h264_nvenc' : 'libx264']);
     // インターレス解除
-    Array.prototype.push.apply(args, ['-vf', USE_GPU ? 'yadif_cuda' : 'yadif']);
+    let videoFilter = USE_GPU ? 'yadif_cuda' : 'yadif';
+    // 録画の途中で映像の大きさが変わっても (先頭の前の番組の部分や、番組の境目で 1080i と 480i を切り替える
+    // サブチャンネル) 番組の大きさと SAR にそろえる。エンコーダは最初のフレームの大きさで開かれ、h264_nvenc は
+    // 大きさの違う CUDA のフレームをそのまま受け取って崩れた映像 (小さい映像の周りがゴミ、大きい映像は左上だけ)
+    // を出力し、ffmpeg は 0 で終わるため、CPU のメモリに移してから scale する (同じ大きさならそのまま通る。
+    // scale_cuda は大きさが変わると ffmpeg が落ちる)。libx264 は ffmpeg が最初のフレームの大きさにそろえる
+    // (前の番組の大きさになる) ため同じく番組の大きさにする。判定区間にフレームがなければそろえない
+    if (videoSize !== null) {
+        videoFilter += `${USE_GPU ? ',hwdownload,format=nv12' : ''},scale=${videoSize.width}:${videoSize.height},setsar=${videoSize.sar}`;
+    }
+    Array.prototype.push.apply(args, ['-vf', videoFilter]);
     // オーディオストリーム設定
     Array.prototype.push.apply(args, plan.audioMapArgs);
     if (plan.trackCount > 0) {

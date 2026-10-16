@@ -14,6 +14,11 @@ const path = require('path');
  *   the input as the real ffprobe does: one "<index>," line per packet (3 here) for every audio stream with packets
  *   there. audioPackets gives each audio stream's [from, to] seconds with packets (a 2nd audio stream of the previous
  *   program only in the recording's lead-in: [0, 5]); without it every stream has packets throughout.
+ *   With -select_streams v:0 and -read_intervals it prints instead the video frames in that part of the input
+ *   (frame=width,height,sample_aspect_ratio, csv) as the real ffprobe does: one "<width>,<height>,<sar>," line per
+ *   frame (3 here per part). videoFrames gives the parts of the video as [from, to, '<width>,<height>,<sar>'] (a
+ *   lead-in of the previous program's size: [0, 15, '720,480,32:27']); the default is 1440x1080 SAR 4:3 throughout,
+ *   [] no frame at all, and 'fail' makes that call fail.
  * - ffmpeg answers the dual-mono check (-v error -dual_mono_mode main/sub) as the real ffmpeg does with the
  *   arguments that check gives ([-ss <seconds>] -i ... -t <seconds> -f s16le): it writes the audio from the -ss
  *   position (0 without it) for the -t seconds or to the end of the audio, whichever comes first, as 192000 bytes of
@@ -36,6 +41,7 @@ const writeFakeTools = (
         dualMono = false,
         probeSeconds = 0,
         audioPackets = null,
+        videoFrames = [[0, 1e9, '1440,1080,4:3']],
         outputAudioDuration = '00:01:40.000000000',
         callLog = null,
         probedSizes = null,
@@ -48,14 +54,23 @@ const writeFakeTools = (
     const mkvStreams = JSON.stringify(indexes.map(index => ({ index, tags: { DURATION: '@D@' } })));
     // "<index> <from> <to>" for every audio stream
     const packets = indexes.map((index, i) => `${index} ${audioPackets ? audioPackets[i].join(' ') : '0 1e9'}`).join('\\n');
+    // "v <from> <to> <width>,<height>,<sar>" for every part of the video
+    const frames = videoFrames === 'fail' ? '' : videoFrames.map(part => `v ${part.join(' ')}`).join('\\n');
+    // prints field "," 3 times for every line ("<id> <from> <to> ...") whose part overlaps the read interval
+    const inInterval = field =>
+        `awk -v ri="$ri" '{ split(ri, p, "%"); s = substr(p[1], 2) + 0; e = s + substr(p[2], 2); ` +
+        `if ($2 < e && $3 > s) for (k = 0; k < 3; k++) print ${field} "," }'`;
     const ffprobe = path.join(dir, 'ffprobe');
     fs.writeFileSync(
         ffprobe,
-        `#!/bin/sh\n${logCall('ffprobe')}sleep ${probeSeconds}\nri=; prev=; for a; do [ "$prev" = -read_intervals ] && ri="$a"; prev="$a"; last="$a"; done\n` +
+        `#!/bin/sh\n${logCall('ffprobe')}sleep ${probeSeconds}\nri=; sel=; prev=; for a; do [ "$prev" = -read_intervals ] && ri="$a"; ` +
+            '[ "$prev" = -select_streams ] && sel="$a"; prev="$a"; last="$a"; done\n' +
             (probedSizes ? `stat -c %s "$last" >> '${probedSizes}'\n` : '') +
+            'if [ -n "$ri" ] && [ "$sel" = v:0 ]; then\n' +
+            (videoFrames === 'fail' ? '  exit 1\n' : `  [ -n '${frames}' ] && printf '${frames}\\n' | ${inInterval('$4')}\n`) +
+            '  exit 0\nfi\n' +
             'if [ -n "$ri" ]; then\n' +
-            `  printf '${packets}\\n' | awk -v ri="$ri" '{ split(ri, p, "%"); s = substr(p[1], 2) + 0; e = s + substr(p[2], 2); ` +
-            'if ($2 < e && $3 > s) for (k = 0; k < 3; k++) print $1 "," }\'\n' +
+            `  printf '${packets}\\n' | ${inInterval('$1')}\n` +
             '  exit 0\nfi\n' +
             `case "$last" in *.mkv) d='${outputDuration}'; a='${outputAudioDuration}'; [ -s "$last" ] && a=$(cat "$last"); ` +
             `st=$(printf '%s' '${mkvStreams}' | sed "s/@D@/$a/g");; *) d='${inputDuration}'; st='${streams}';; esac\n` +
