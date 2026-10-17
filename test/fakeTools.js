@@ -25,7 +25,8 @@ const path = require('path');
  *   [0, 15, '720,480,32:27']); the default is 1440x1080 SAR 4:3 throughout, [] no frame at all, and 'fail' makes
  *   that call fail.
  *   With -select_streams s and -read_intervals it prints the caption streams (subtitleStreams, indexes; none by
- *   default) that the PMT lists, under programs.
+ *   default) that the PMT lists, under programs; for a recording without a caption stream (CS channels) it fails
+ *   as the real ffprobe does ("Could not seek ...: Operation not permitted", exit 1; review C19-1).
  *   pmtStreams lists the stream indexes the program's PMT has where it is read (null: every video, audio and caption
  *   stream). A recording of a sub-channel made while Mirakurun passed every PID the PMT ever listed (review D18-1)
  *   has the main channel's video 0 and audio 1 throughout, the program's own (e.g. video 30, audio 31) from the
@@ -101,7 +102,9 @@ const writeFakeTools = (
                   `${inInterval(`(split($4, f, ",") ? ${frameItem} : "")`)})" '${videoPmt}' '${videoStreams}'\n`) +
             '  exit 0\nfi\n' +
             'if [ -n "$ri" ] && [ "$sel" = s ]; then\n' +
-            `  printf '%s\\n' '{"packets":[],"programs":${pmt(subtitleStreams)}}'\n` +
+            (subtitleStreams.length === 0
+                ? "  echo 'Could not seek to 60.000000: Operation not permitted' >&2; exit 1\n"
+                : `  printf '%s\\n' '{"packets":[],"programs":${pmt(subtitleStreams)}}'\n`) +
             '  exit 0\nfi\n' +
             'if [ -n "$ri" ]; then\n' +
             `  printf '{"packets":[%s],"programs":%s}\\n' "$([ -n '${packets}' ] && printf '${packets}\\n' | ` +

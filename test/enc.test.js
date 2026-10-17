@@ -202,7 +202,7 @@ test('splits dual-mono audio into a Japanese and an English track', () => {
             '-map', '0:0', '-c:v', 'libx264', '-vf', 'yadif,scale=1440:1080,setsar=4/3',
             '-map', '[FL]', '-map', '[FR]', '-c:a', 'aac', '-metadata:s:a:0', 'language=jpn', '-metadata:s:a:1', 'language=eng',
             '-map', '1:s?', '-c:s', 'srt', '-preset', 'veryfast', '-crf', '26', env.OUTPUT,
-            '-map', '1:v', '-c', 'copy', '-f', 'null', '-',
+            '-map', '1:0', '-c', 'copy', '-f', 'null', '-',
         ]);
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -250,7 +250,7 @@ test('decodes only the main language when the audio becomes dual-mono after the 
             '-map', '0:0', '-c:v', 'libx264', '-vf', 'yadif,scale=1440:1080,setsar=4/3',
             '-map', '0:a', '-c:a', 'aac',
             '-map', '1:s?', '-c:s', 'srt', '-preset', 'veryfast', '-crf', '26', env.OUTPUT,
-            '-map', '1:v', '-c', 'copy', '-f', 'null', '-',
+            '-map', '1:0', '-c', 'copy', '-f', 'null', '-',
         ]);
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -537,8 +537,29 @@ test('encodes only the captions that the program\'s PMT lists', () => {
     assert.deepStrictEqual(args.slice(args.indexOf('-c:s') - 2, args.indexOf('-c:s')), ['-map', '1:33']);
 });
 
+test('the caption input starts at the program\'s own video, not the main channel\'s lead-in', () => {
+    // the caption input's video sets where its captions start (-isync 0): starting it at the main channel's lead-in
+    // (stream 0) would make every caption late by the lead-in (review D19-2)
+    const { status, args } = ffmpegArgsOf('cpu', {
+        ...SUB_CHANNEL,
+        videoFrames: [[0, 5.5, '1440,1080,4:3', 0], [5.5, 1e9, '720,480,32:27', 30]],
+        audioPackets: [[0, 5.5], [5.5, 1e9]],
+        subtitleStreams: [3, 33],
+        pmtStreams: [11, 30, 33],
+    });
+    assert.strictEqual(status, 0);
+    const nullOutput = args.slice(args.lastIndexOf('-f') - 4, args.lastIndexOf('-f'));
+    assert.deepStrictEqual(nullOutput, ['-map', '1:30', '-c', 'copy']);
+});
+
 test('encodes every caption stream when the PMT lists none', () => {
     const { status, args } = ffmpegArgsOf('cpu', { subtitleStreams: [3], pmtStreams: [0, 1] });
+    assert.strictEqual(status, 0);
+    assert.deepStrictEqual(args.slice(args.indexOf('-c:s') - 2, args.indexOf('-c:s')), ['-map', '1:s?']);
+});
+
+test('encodes a recording without a caption stream (CS channels), where the caption probe fails', () => {
+    const { status, args } = ffmpegArgsOf('cpu', { subtitleStreams: [] });
     assert.strictEqual(status, 0);
     assert.deepStrictEqual(args.slice(args.indexOf('-c:s') - 2, args.indexOf('-c:s')), ['-map', '1:s?']);
 });

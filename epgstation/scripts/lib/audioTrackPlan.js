@@ -191,7 +191,9 @@ function programSubtitleStreams(ffprobePath, inputPath, inputArgs, inputDuration
             ],
             (err, stdout) => {
                 if (err) {
-                    reject(err);
+                    // 字幕ストリームのない録画 (CS) では -select_streams s で選ぶものがなく、ffprobe は判定区間へ
+                    // シークできずに失敗する
+                    resolve(null);
                     return;
                 }
                 try {

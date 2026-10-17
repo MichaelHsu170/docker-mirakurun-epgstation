@@ -165,8 +165,10 @@ const getDuration = (filePath, inputArgs = []) => {
     }
     // 出力ファイル
     Array.prototype.push.apply(args, [output]);
-    // 字幕用の入力の映像は捨てる (CAPTION_INPUT_ARGS)
-    Array.prototype.push.apply(args, ['-map', '1:v', '-c', 'copy', '-f', 'null', '-']);
+    // 字幕用の入力の映像は捨てる (CAPTION_INPUT_ARGS)。1つ目の入力と同じ番組の映像にする (メインチャンネルの前の番組の
+    // 映像から始めると、字幕がその分遅れる)
+    const captionVideoMapArgs = videoSize === null ? ['-map', '1:v'] : videoSize.streams.flatMap(index => ['-map', `1:${index}`]);
+    Array.prototype.push.apply(args, [...captionVideoMapArgs, '-c', 'copy', '-f', 'null', '-']);
 
     const child = spawn(ffmpeg, args);
 
