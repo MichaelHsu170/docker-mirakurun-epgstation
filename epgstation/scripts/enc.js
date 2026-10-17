@@ -1,6 +1,6 @@
 const spawn = require('child_process').spawn;
 const execFile = require('child_process').execFile;
-const { audioTrackPlan, programVideoSize } = require('./lib/audioTrackPlan.js');
+const { audioTrackPlan, programVideoSize, programSubtitleStreams } = require('./lib/audioTrackPlan.js');
 const ffmpeg = process.env.FFMPEG;
 const ffprobe = process.env.FFPROBE;
 
@@ -75,11 +75,13 @@ const getAudioDuration = filePath => {
 /**
  * 動画長取得関数
  * @param {string} filePath ファイルパス
+ * @param {string[]} [inputArgs] 入力オプション (録画には PROBE_ARGS: 既定の 5 MB より後に始まるストリーム (サブチャンネルが
+ *   番組の始めに移る自分の PID) があると長さが N/A になり、長さの判定がすべて飛ばされる)
  * @return number 動画長を返す (秒)
  */
-const getDuration = filePath => {
+const getDuration = (filePath, inputArgs = []) => {
     return new Promise((resolve, reject) => {
-        execFile(ffprobe, ['-v', '0', '-show_format', '-of', 'json', filePath], (err, stdout) => {
+        execFile(ffprobe, ['-v', '0', ...inputArgs, '-show_format', '-of', 'json', filePath], (err, stdout) => {
             if (err) {
                 reject(err);
 
@@ -98,14 +100,16 @@ const getDuration = filePath => {
 
 (async () => {
     // 進捗計算のために動画の長さを取得
-    const duration = await getDuration(input);
+    const duration = await getDuration(input, PROBE_ARGS);
     // 音声ストリーム構成 (実ストリーム数・二カ国語判定) を実際にデコードして判定する。
     // EPG由来のメタデータ (AUDIOCOMPONENTTYPE) は誤りや欠落があり得るため信頼しない。
     // 二カ国語と map する音声ストリームは先頭 (前の番組の音声が入る) ではなく番組の中の音声で判定する
     // (audioTrackPlan.js の DUAL_MONO_JUDGE_START)
     const plan = await audioTrackPlan(ffprobe, ffmpeg, input, PROBE_ARGS, false, duration);
-    // 番組の映像の大きさ (先頭の前の番組の部分ではなく、二カ国語と同じく番組の中で判定する)
+    // 番組の映像ストリームと大きさ (先頭の前の番組の部分ではなく、二カ国語と同じく番組の中で判定する)
     const videoSize = await programVideoSize(ffprobe, input, PROBE_ARGS, duration);
+    // 番組の字幕ストリーム (サブチャンネルの録画の先頭のメインチャンネルの字幕を除く)
+    const subtitleStreams = await programSubtitleStreams(ffprobe, input, PROBE_ARGS, duration);
 
     const args = ['-y'];
     // NVidia GPU
@@ -127,12 +131,15 @@ const getDuration = filePath => {
     if (plan.filterComplex) {
         Array.prototype.push.apply(args, ['-filter_complex', plan.filterComplex]);
     }
-    // ビデオストリーム設定
-    Array.prototype.push.apply(args, ['-map', '0:v', '-c:v', USE_GPU ? 'h264_nvenc' : 'libx264']);
+    // ビデオストリーム設定: 番組の映像だけ (前の番組の部分にしかない映像や、サブチャンネルの録画に入った
+    // メインチャンネルの映像は除く。programVideoSize)。判定区間にフレームがなければ全ての映像
+    const videoMapArgs = videoSize === null ? ['-map', '0:v'] : videoSize.streams.flatMap(index => ['-map', `0:${index}`]);
+    Array.prototype.push.apply(args, [...videoMapArgs, '-c:v', USE_GPU ? 'h264_nvenc' : 'libx264']);
     // インターレス解除
     let videoFilter = USE_GPU ? 'yadif_cuda' : 'yadif';
-    // 録画の途中で映像の大きさが変わっても (先頭の前の番組の部分や、番組の境目で 1080i と 480i を切り替える
-    // サブチャンネル) 番組の大きさと SAR にそろえる。エンコーダは最初のフレームの大きさで開かれ、h264_nvenc は
+    // 録画の途中で同じ映像ストリームの大きさが変わっても (先頭の前の番組の部分の大きさが違う) 番組の大きさと
+    // SAR にそろえる (サブチャンネルが番組の境目で 1080i と 480i を切り替えるときは PID も変わり、前の番組の映像は
+    // map されない)。エンコーダは最初のフレームの大きさで開かれ、h264_nvenc は
     // 大きさの違う CUDA のフレームをそのまま受け取って崩れた映像 (小さい映像の周りがゴミ、大きい映像は左上だけ)
     // を出力し、ffmpeg は 0 で終わるため、CPU のメモリに移してから scale する (同じ大きさならそのまま通る。
     // scale_cuda は大きさが変わると ffmpeg が落ちる)。libx264 は ffmpeg が最初のフレームの大きさにそろえる
@@ -149,8 +156,9 @@ const getDuration = filePath => {
             Array.prototype.push.apply(args, ['-metadata:s:a:0', 'language=jpn', '-metadata:s:a:1', 'language=eng']);
         }
     }
-    // 字幕ストリーム設定
-    Array.prototype.push.apply(args, ['-map', '1:s?', '-c:s', 'srt']);
+    // 字幕ストリーム設定: 番組の PMT にある字幕 (2つ目の入力のストリーム番号は1つ目と同じ)。分からなければ全ての字幕
+    const subtitleMapArgs = subtitleStreams === null ? ['-map', '1:s?'] : subtitleStreams.flatMap(index => ['-map', `1:${index}`]);
+    Array.prototype.push.apply(args, [...subtitleMapArgs, '-c:s', 'srt']);
     // 品質設定 (libx264のみ、h264_nvencでは-crfが無効なため)
     if (!USE_GPU) {
         Array.prototype.push.apply(args, ['-preset', 'veryfast', '-crf', '26']);
@@ -306,7 +314,8 @@ const getDuration = filePath => {
         // 成功扱いにすると元ファイルが削除されて欠落部分が失われるため、出力が入力より
         // MAX_MISSING_SECONDS 秒を超えて短ければ失敗として返す。ただし ffmpeg がタイムスタンプの飛びを
         // 詰めた時間 (DISCONTINUITY_REG) は入力にデータがなく失われないため、その分も短くてよい。
-        // 入力の長さが分からない場合は判定しない (音声の長さも)
+        // 番組の映像の前の、別のストリームにしかない前の番組の部分 (programVideoSize の leadInSeconds) はエンコードしない
+        // ため、その分も短くてよい。入力の長さが分からない場合は判定しない (音声の長さも)
         if (!Number.isFinite(duration) || duration <= 0) {
             console.error(`enc.js: input duration is unknown (${duration}): not checking the output duration`);
             return;
@@ -314,16 +323,19 @@ const getDuration = filePath => {
         try {
             const outputDuration = await getDuration(output);
             const closedSeconds = Math.max(0, -discontinuityOffset / 1e6);
-            if (!(outputDuration >= duration - MAX_MISSING_SECONDS - closedSeconds)) {
+            const leadInSeconds = videoSize === null ? 0 : videoSize.leadInSeconds;
+            const programDuration = duration - leadInSeconds;
+            const inputText = `input is ${duration}s${leadInSeconds > 0 ? ` (${leadInSeconds}s of it before the program's own video, not encoded)` : ''}`;
+            if (!(outputDuration >= programDuration - MAX_MISSING_SECONDS - closedSeconds)) {
                 console.error(
-                    `enc.js: output is ${outputDuration}s, input is ${duration}s, of which ffmpeg closed up ${closedSeconds}s of timestamp gaps: treating the encode as failed`,
+                    `enc.js: output is ${outputDuration}s, ${inputText}, of which ffmpeg closed up ${closedSeconds}s of timestamp gaps: treating the encode as failed`,
                 );
                 process.exitCode = 1;
                 return;
             }
-            if (!(outputDuration >= duration - MAX_MISSING_SECONDS)) {
+            if (!(outputDuration >= programDuration - MAX_MISSING_SECONDS)) {
                 console.error(
-                    `enc.js: output is ${outputDuration}s, input is ${duration}s: ffmpeg closed up ${closedSeconds}s of timestamp gaps (no data in the input), so the output is complete`,
+                    `enc.js: output is ${outputDuration}s, ${inputText}: ffmpeg closed up ${closedSeconds}s of timestamp gaps (no data in the input), so the output is complete`,
                 );
             }
             // 音声が途中で途切れた出力も成功扱いにすると元ファイルが削除されて音声が失われる

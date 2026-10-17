@@ -124,6 +124,18 @@ test('splits a dual-mono program recorded after a program with two audio streams
     );
 });
 
+// a sub-channel recorded while Mirakurun passed every PID the PMT ever listed (review D18-1: NHK BS 102 after a
+// simulcast slot with 101): the main channel's audio (stream 1) has packets throughout, but the PMT lists only the
+// sub-channel's own (11)
+test('maps only the audio stream that the program\'s PMT lists when another program\'s has packets too', async t => {
+    const tools = { audioStreams: 2, audioPackets: [[0, 300], [5.5, 300]], pmtStreams: [11, 30] };
+    assert.deepStrictEqual(await plan(t, { ...tools, dualMono: false }, [], false, 300), {
+        filterComplex: null,
+        audioMapArgs: ['-map', '0:a:1'],
+        trackCount: 1,
+    });
+});
+
 test('maps and judges the program\'s audio stream when it is not the first one', async t => {
     const tools = { audioStreams: 2, audioPackets: [[0, 5], [4, 300]] };
     assert.deepStrictEqual(await plan(t, { ...tools, dualMono: false }, [], false, 300), {
@@ -144,7 +156,7 @@ test('maps and judges the program\'s audio stream when it is not the first one',
     assert.deepStrictEqual(fs.readFileSync(callLog, 'utf8').trimEnd().split('\n').sort(), [
         'ffmpeg -v error -dual_mono_mode main -ss 60 -i in.m2ts -map 0:a:1 -t 5 -f s16le -',
         'ffmpeg -v error -dual_mono_mode sub -ss 60 -i in.m2ts -map 0:a:1 -t 5 -f s16le -',
-        'ffprobe -v error -read_intervals +60%+5 -select_streams a -show_entries packet=stream_index -of csv=p=0 in.m2ts',
+        'ffprobe -v error -read_intervals +60%+5 -select_streams a -show_entries packet=stream_index:program_stream=index -of json in.m2ts',
         'ffprobe -v error -select_streams a -show_entries stream=index -of json in.m2ts',
     ]);
 });
@@ -267,7 +279,7 @@ test('puts the input options before the input in the probe for the program\'s au
 
     assert.deepStrictEqual(fs.readFileSync(callLog, 'utf8').trimEnd().split('\n'), [
         'ffprobe -v error -analyzeduration 7M -select_streams a -show_entries stream=index -of json in.m2ts',
-        'ffprobe -v error -analyzeduration 7M -read_intervals +25.5%+5 -select_streams a -show_entries packet=stream_index -of csv=p=0 in.m2ts',
+        'ffprobe -v error -analyzeduration 7M -read_intervals +25.5%+5 -select_streams a -show_entries packet=stream_index:program_stream=index -of json in.m2ts',
     ]);
 });
 

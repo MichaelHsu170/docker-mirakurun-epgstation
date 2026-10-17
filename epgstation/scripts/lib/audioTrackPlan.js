@@ -7,7 +7,11 @@ const { execFile, spawn } = require('child_process');
 // 45 秒、それに遅れの実測の最大 8.6 秒を足しても収まる。それより短い録画は末尾の DUAL_MONO_DECODE_SECONDS 秒で判定する。
 // 長さの分からない入力 (ストリームの判定ウィンドウ) は先頭から判定する。番組の映像の大きさ (programVideoSize) も同じ区間で判定する。
 // 音声ストリームが2以上の録画は、同じ区間にパケットのあるストリームを番組の音声とする (前の番組の2本目の音声は
-// 前の番組の部分にしかなく、map すると番組の間は空のトラックになり、ffmpeg 9 はそれを待って入力をメモリに溜め続ける)
+// 前の番組の部分にしかなく、map すると番組の間は空のトラックになり、ffmpeg 9 はそれを待って入力をメモリに溜め続ける)。
+// 映像も同じ区間にフレームのあるストリームを番組の映像とする。どちらも (字幕も) 同じ区間の番組の PMT (録画の TS には Mirakurun が
+// 番組のサービスの PMT だけを残す) にないストリームは除く: サブチャンネル (NHK BS 102、BS日テレ 142、tvk2 など) は
+// メインチャンネルとの同時放送の間はその PID を使い、自分の番組では自分の PID に移る。Mirakurun が PMT から消えた PID を
+// 渡し続けていた間 (review D18-1) の録画は、メインチャンネルの番組も録画の終わりまで持つ
 const DUAL_MONO_JUDGE_START = 60;
 const DUAL_MONO_DECODE_SECONDS = 5;
 
@@ -18,7 +22,7 @@ const DUAL_MONO_DECODE_SECONDS = 5;
  *
  * - 実音声ストリームが2以上: そのまま全て -map する (既に別個の言語トラックのため
  *   channelsplit 等の加工は不要。加工すると重複/誤ったトラックを生む)。ただし長さが分かれば判定区間に
- *   パケットのあるストリームだけを使う (無ければ全て)。それが1本なら以下の1本の場合と同じ
+ *   パケットがあり番組の PMT にあるストリームだけを使う (無ければ全て)。それが1本なら以下の1本の場合と同じ
  * - 実音声ストリームが1で二カ国語: channelsplit で2トラックに分離する
  * - 実音声ストリームが1で二カ国語でない: そのまま1トラックとして -map する
  * - 実音声ストリームが0: 音声を一切 map しない
@@ -87,16 +91,31 @@ function programJudgeStart(inputDuration) {
 }
 
 /**
- * 番組の映像の大きさ: 音声と同じ判定区間 (programJudgeStart から DUAL_MONO_DECODE_SECONDS 秒) の最初のフレームの
- * 幅、高さ、SAR。録画の先頭の前の番組の部分は、番組と大きさが違うことがある (1080i と 480i を切り替える NHK BS 102、
- * tvk2 などのサブチャンネル)。
+ * ffprobe の JSON 出力 (-show_entries ...:program_stream=index) の programs にあるストリーム番号: 読んだ区間の最後の
+ * PMT にあるストリームのうち -select_streams で選んだもの (ffmpeg は PMT が変わるとプログラムのストリームを
+ * 入れ替える)。
+ * @param {object} result ffprobe の JSON 出力
+ * @return {Set<number>|null} 1つもなければ null (絞り込まない)
+ */
+function pmtStreamIndexes(result) {
+    const indexes = (result.programs || []).flatMap(program => (program.streams || []).map(stream => stream.index));
+    return indexes.length === 0 ? null : new Set(indexes);
+}
+
+/**
+ * 番組の映像: 音声と同じ判定区間 (programJudgeStart から DUAL_MONO_DECODE_SECONDS 秒) にフレームがあり、
+ * 番組の PMT にある映像ストリームと、その最初の (SAR の分かる) フレームの幅、高さ、SAR。録画の先頭の前の番組の部分は、
+ * 番組と大きさが違うことがある (1080i と 480i を切り替える NHK BS 102、tvk2 などのサブチャンネル)。前の番組の部分にしか
+ * ない映像ストリーム (サブチャンネルの番組の前のメインチャンネルの PID) や、PMT にない別の番組の映像は含まない。
  * read_intervals の + は入力の先頭からの位置 (付けないと放送のタイムスタンプそのものになる)
  * @param {string} ffprobePath
  * @param {string} inputPath
  * @param {string[]} inputArgs 入力オプション
  * @param {number} inputDuration 入力の長さ (秒)
- * @return {Promise<{width: number, height: number, sar: string}|null>} sar は "4/3" の形。判定区間に
- *   SAR の分かるフレームがなければ null
+ * @return {Promise<{width: number, height: number, sar: string, streams: number[], leadInSeconds: number}|null>}
+ *   sar は "4/3" の形。streams は入力内のストリーム番号 (小さい順)。leadInSeconds は最初の映像の始まりから番組の映像の
+ *   始まりまでの秒数 (前の番組の映像が別のストリームの録画で、その部分はエンコードされない。それ以外は 0)。
+ *   判定区間に SAR の分かるフレームがなければ null
  */
 function programVideoSize(ffprobePath, inputPath, inputArgs, inputDuration) {
     const judgeStart = programJudgeStart(inputDuration);
@@ -107,9 +126,9 @@ function programVideoSize(ffprobePath, inputPath, inputArgs, inputDuration) {
                 '-v', 'error',
                 ...inputArgs,
                 '-read_intervals', `+${judgeStart > 0 ? judgeStart : 0}%+${DUAL_MONO_DECODE_SECONDS}`,
-                '-select_streams', 'v:0',
-                '-show_entries', 'frame=width,height,sample_aspect_ratio',
-                '-of', 'csv=p=0',
+                '-select_streams', 'v',
+                '-show_entries', 'frame=stream_index,width,height,sample_aspect_ratio:program_stream=index:stream=index,start_time',
+                '-of', 'json',
                 inputPath,
             ],
             (err, stdout) => {
@@ -117,9 +136,70 @@ function programVideoSize(ffprobePath, inputPath, inputArgs, inputDuration) {
                     reject(err);
                     return;
                 }
-                // 1フレーム1行 (例: "1440,1080,4:3,")。SAR の分からないフレームは "N/A"
-                const frame = stdout.match(/^(\d+),(\d+),([1-9]\d*):([1-9]\d*)/m);
-                resolve(frame === null ? null : { width: parseInt(frame[1], 10), height: parseInt(frame[2], 10), sar: `${frame[3]}/${frame[4]}` });
+                try {
+                    const result = JSON.parse(stdout);
+                    const pmt = pmtStreamIndexes(result);
+                    const frames = (result.frames || []).filter(frame => pmt === null || pmt.has(frame.stream_index));
+                    // SAR の分からないフレームには sample_aspect_ratio がない (csv では "N/A")
+                    const frame = frames.find(f => /^[1-9]\d*:[1-9]\d*$/.test(f.sample_aspect_ratio));
+                    if (frame === undefined) {
+                        resolve(null);
+                        return;
+                    }
+                    const streams = [...new Set(frames.map(f => f.stream_index))].sort((a, b) => a - b);
+                    // 映像ストリームの始まり (秒。分からないものは除く)
+                    const startOf = indexes =>
+                        Math.min(...(result.streams || []).filter(st => indexes === null || indexes.includes(st.index)).map(st => parseFloat(st.start_time)).filter(Number.isFinite));
+                    const leadInSeconds = startOf(streams) - startOf(null);
+                    resolve({
+                        width: frame.width,
+                        height: frame.height,
+                        sar: frame.sample_aspect_ratio.replace(':', '/'),
+                        streams,
+                        leadInSeconds: leadInSeconds > 0 ? leadInSeconds : 0,
+                    });
+                } catch (e) {
+                    reject(e);
+                }
+            },
+        );
+    });
+}
+
+/**
+ * 番組の字幕: 判定区間 (programVideoSize と同じ) の番組の PMT にある字幕ストリーム。サブチャンネルの録画の先頭の
+ * メインチャンネルの字幕 (別の PID) は含まない。
+ * @param {string} ffprobePath
+ * @param {string} inputPath
+ * @param {string[]} inputArgs 入力オプション
+ * @param {number} inputDuration 入力の長さ (秒)
+ * @return {Promise<number[]|null>} 入力内のストリーム番号 (PMT の順)。PMT に字幕がないか読めなければ null
+ */
+function programSubtitleStreams(ffprobePath, inputPath, inputArgs, inputDuration) {
+    const judgeStart = programJudgeStart(inputDuration);
+    return new Promise((resolve, reject) => {
+        execFile(
+            ffprobePath,
+            [
+                '-v', 'error',
+                ...inputArgs,
+                '-read_intervals', `+${judgeStart > 0 ? judgeStart : 0}%+${DUAL_MONO_DECODE_SECONDS}`,
+                '-select_streams', 's',
+                '-show_entries', 'packet=stream_index:program_stream=index',
+                '-of', 'json',
+                inputPath,
+            ],
+            (err, stdout) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+                try {
+                    const pmt = pmtStreamIndexes(JSON.parse(stdout));
+                    resolve(pmt === null ? null : [...pmt]);
+                } catch (e) {
+                    reject(e);
+                }
             },
         );
     });
@@ -163,7 +243,7 @@ function getAudioStreamIndexes(ffprobePath, inputPath, inputArgs) {
 }
 
 /**
- * judgeStart 秒目から DUAL_MONO_DECODE_SECONDS 秒の間にパケットのある音声ストリームを返す。
+ * judgeStart 秒目から DUAL_MONO_DECODE_SECONDS 秒の間にパケットがあり、番組の PMT にある音声ストリームを返す。
  * read_intervals の + は入力の先頭からの位置 (付けないと放送のタイムスタンプそのものになる)
  * @param {string} ffprobePath
  * @param {string} inputPath
@@ -180,8 +260,8 @@ function getAudioStreamsWithPackets(ffprobePath, inputPath, inputArgs, judgeStar
                 ...inputArgs,
                 '-read_intervals', `+${judgeStart}%+${DUAL_MONO_DECODE_SECONDS}`,
                 '-select_streams', 'a',
-                '-show_entries', 'packet=stream_index',
-                '-of', 'csv=p=0',
+                '-show_entries', 'packet=stream_index:program_stream=index',
+                '-of', 'json',
                 inputPath,
             ],
             (err, stdout) => {
@@ -189,8 +269,13 @@ function getAudioStreamsWithPackets(ffprobePath, inputPath, inputArgs, judgeStar
                     reject(err);
                     return;
                 }
-                // 1パケット1行 ("1," のように区切りが付く)
-                resolve(new Set(stdout.split('\n').filter(line => line !== '').map(line => parseInt(line, 10))));
+                try {
+                    const result = JSON.parse(stdout);
+                    const pmt = pmtStreamIndexes(result);
+                    resolve(new Set((result.packets || []).map(packet => packet.stream_index).filter(index => pmt === null || pmt.has(index))));
+                } catch (e) {
+                    reject(e);
+                }
             },
         );
     });
@@ -252,4 +337,4 @@ function decodeAudio(ffmpegPath, inputPath, mode, inputArgs, judgeStart, track) 
     });
 }
 
-module.exports = { audioTrackPlan, getAudioStreamCount, programVideoSize };
+module.exports = { audioTrackPlan, getAudioStreamCount, programVideoSize, programSubtitleStreams };

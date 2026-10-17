@@ -199,7 +199,7 @@ test('splits dual-mono audio into a Japanese and an English track', () => {
             '-fix_sub_duration', '-isync', '0', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
             '-filter_complex',
             '[0:a:0]channelsplit=channel_layout=stereo[FL0][FR0];[FL0]aformat=channel_layouts=mono[FL];[FR0]aformat=channel_layouts=mono[FR]',
-            '-map', '0:v', '-c:v', 'libx264', '-vf', 'yadif,scale=1440:1080,setsar=4/3',
+            '-map', '0:0', '-c:v', 'libx264', '-vf', 'yadif,scale=1440:1080,setsar=4/3',
             '-map', '[FL]', '-map', '[FR]', '-c:a', 'aac', '-metadata:s:a:0', 'language=jpn', '-metadata:s:a:1', 'language=eng',
             '-map', '1:s?', '-c:s', 'srt', '-preset', 'veryfast', '-crf', '26', env.OUTPUT,
             '-map', '1:v', '-c', 'copy', '-f', 'null', '-',
@@ -247,7 +247,7 @@ test('decodes only the main language when the audio becomes dual-mono after the 
         assert.deepStrictEqual(args, [
             '-y', '-dual_mono_mode', 'main', '-readrate', '12', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
             '-fix_sub_duration', '-isync', '0', '-analyzeduration', '30M', '-probesize', '200M', '-i', env.INPUT,
-            '-map', '0:v', '-c:v', 'libx264', '-vf', 'yadif,scale=1440:1080,setsar=4/3',
+            '-map', '0:0', '-c:v', 'libx264', '-vf', 'yadif,scale=1440:1080,setsar=4/3',
             '-map', '0:a', '-c:a', 'aac',
             '-map', '1:s?', '-c:s', 'srt', '-preset', 'veryfast', '-crf', '26', env.OUTPUT,
             '-map', '1:v', '-c', 'copy', '-f', 'null', '-',
@@ -382,7 +382,7 @@ test('probes 30 s of the input for streams in the probe for the program\'s audio
 
         const calls = fs.readFileSync(callLog, 'utf8').trimEnd().split('\n');
         assert.deepStrictEqual(calls.filter(c => c.includes('-read_intervals') && c.includes('-select_streams a ')), [
-            `ffprobe -v error -analyzeduration 30M -probesize 200M -read_intervals +60%+5 -select_streams a -show_entries packet=stream_index -of csv=p=0 ${env.INPUT}`,
+            `ffprobe -v error -analyzeduration 30M -probesize 200M -read_intervals +60%+5 -select_streams a -show_entries packet=stream_index:program_stream=index -of json ${env.INPUT}`,
         ]);
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -391,23 +391,26 @@ test('probes 30 s of the input for streams in the probe for the program\'s audio
 
 /**
  * Runs enc.js in the given mode (gpu or cpu) with the fakes of writeFakes (tools) and an ffmpeg that records its
- * arguments. Returns enc.js's exit code and the value of ffmpeg's -vf (null when ffmpeg did not run).
+ * arguments. Returns enc.js's exit code and ffmpeg's arguments (null when ffmpeg did not run).
  */
-const videoFilterOf = (mode, tools) => {
+const ffmpegArgsOf = (mode, tools) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'enc-test-'));
     try {
         const argsFile = path.join(dir, 'args');
         const env = writeFakes(dir, `printf '%s\\n' "$@" > '${argsFile}'`, tools);
         const status = spawnSync(process.execPath, [encJs, mode], { env }).status;
-        if (!fs.existsSync(argsFile)) {
-            return { status, vf: null };
-        }
-        const args = fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n');
 
-        return { status, vf: args[args.indexOf('-vf') + 1] };
+        return { status, args: fs.existsSync(argsFile) ? fs.readFileSync(argsFile, 'utf8').trimEnd().split('\n') : null };
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }
+};
+
+/** Like ffmpegArgsOf, with the value of ffmpeg's -vf (null when ffmpeg did not run) instead of its arguments */
+const videoFilterOf = (mode, tools) => {
+    const { status, args } = ffmpegArgsOf(mode, tools);
+
+    return { status, vf: args === null ? null : args[args.indexOf('-vf') + 1] };
 };
 
 // a recording of a program in 480i (720x480, SAR 32:27) that starts with 15 s of the previous program in 1080i
@@ -472,6 +475,107 @@ test('deinterlaces without scaling when no video frame is found where the progra
 test('fails without encoding when the probe for the program\'s size fails', () => {
     // the TS is kept
     assert.deepStrictEqual(videoFilterOf('gpu', { videoFrames: 'fail' }), { status: 1, vf: null });
+});
+
+/** ffmpeg's video and audio -map arguments, its -vf, and enc.js's exit code */
+const mapsOf = (mode, tools) => {
+    const { status, args } = ffmpegArgsOf(mode, tools);
+    const maps = args.flatMap((arg, i) => (arg === '-map' && args[i + 1].startsWith('0:') ? [args[i + 1]] : []));
+
+    return { status, maps, vf: args[args.indexOf('-vf') + 1] };
+};
+
+// NHK BS 102's MLB at 09:00 after a simulcast slot with NHK BS 101 (review D18-1): the recording starts with 5.5 s
+// of the main channel's 1080i video (stream 0) and audio (stream 1), then the sub-channel's own 480i video (30) and
+// audio (11); from then on the PMT lists only the sub-channel's own streams
+// The output starts with the sub-channel's own streams: it is shorter than the recording by the lead-in.
+const SUB_CHANNEL = {
+    audioStreams: 2,
+    inputDuration: '300',
+    outputDuration: '294.5',
+    outputAudioDuration: '00:04:54.500000000',
+};
+
+test('encodes only the sub-channel program\'s video and audio when the main channel\'s run to the end of the recording', () => {
+    // recorded while Mirakurun passed every PID the PMT ever listed: the main channel's streams have packets throughout
+    const tools = {
+        ...SUB_CHANNEL,
+        videoFrames: [[0, 1e9, '1440,1080,4:3', 0], [5.5, 1e9, '720,480,32:27', 30]],
+        audioPackets: [[0, 1e9], [5.5, 1e9]],
+        pmtStreams: [11, 30],
+    };
+    assert.deepStrictEqual(mapsOf('cpu', tools), { status: 0, maps: ['0:30', '0:a:1'], vf: 'yadif,scale=720:480,setsar=32/27' });
+    assert.deepStrictEqual(mapsOf('gpu', tools), {
+        status: 0,
+        maps: ['0:30', '0:a:1'],
+        vf: 'yadif_cuda,hwdownload,format=nv12,scale=720:480,setsar=32/27',
+    });
+});
+
+test('leaves out a video stream that is only in the lead-in', () => {
+    // the main channel's streams stop at the switch; no PMT read (pmtStreams lists nothing): the 60 s window decides
+    const tools = {
+        ...SUB_CHANNEL,
+        videoFrames: [[0, 5.5, '1440,1080,4:3', 0], [5.5, 1e9, '720,480,32:27', 30]],
+        audioPackets: [[0, 5.5], [5.5, 1e9]],
+        pmtStreams: [],
+    };
+    assert.deepStrictEqual(mapsOf('cpu', tools), { status: 0, maps: ['0:30', '0:a:1'], vf: 'yadif,scale=720:480,setsar=32/27' });
+});
+
+test('encodes only the captions that the program\'s PMT lists', () => {
+    // the main channel's captions (stream 3) run to the end of a recording made before the Mirakurun fix, or end with
+    // the lead-in after it; the sub-channel's own are stream 33
+    const { status, args } = ffmpegArgsOf('cpu', {
+        ...SUB_CHANNEL,
+        videoFrames: [[0, 5.5, '1440,1080,4:3', 0], [5.5, 1e9, '720,480,32:27', 30]],
+        audioPackets: [[0, 5.5], [5.5, 1e9]],
+        subtitleStreams: [3, 33],
+        pmtStreams: [11, 30, 33],
+    });
+    assert.strictEqual(status, 0);
+    assert.deepStrictEqual(args.slice(args.indexOf('-c:s') - 2, args.indexOf('-c:s')), ['-map', '1:33']);
+});
+
+test('encodes every caption stream when the PMT lists none', () => {
+    const { status, args } = ffmpegArgsOf('cpu', { subtitleStreams: [3], pmtStreams: [0, 1] });
+    assert.strictEqual(status, 0);
+    assert.deepStrictEqual(args.slice(args.indexOf('-c:s') - 2, args.indexOf('-c:s')), ['-map', '1:s?']);
+});
+
+test('fails the encode of a sub-channel program when more than 5 s of the program are missing', () => {
+    // the 5.5 s lead-in of the main channel is not encoded; 6 s more are missing
+    const tools = {
+        ...SUB_CHANNEL,
+        outputDuration: '288.5',
+        outputAudioDuration: '00:04:48.500000000',
+        videoFrames: [[0, 5.5, '1440,1080,4:3', 0], [5.5, 1e9, '720,480,32:27', 30]],
+        audioPackets: [[0, 5.5], [5.5, 1e9]],
+    };
+    assert.strictEqual(runEnc('exit 0', tools), 1);
+    assert.strictEqual(runEnc('exit 0', { ...tools, outputDuration: '289.5', outputAudioDuration: '00:04:49.500000000' }), 0);
+});
+
+test('allows no lead-in when the previous program\'s video is on the program\'s own video stream', () => {
+    // one video stream, from 3 s in (after the first audio), changing size at 15 s: the whole recording is encoded
+    const videoFrames = [[3, 15, '1440,1080,4:3'], [15, 1e9, '720,480,32:27']];
+    assert.strictEqual(runEnc('exit 0', { inputDuration: '300', outputDuration: '294.5', videoFrames }), 1);
+});
+
+test('encodes every video stream that the program has', () => {
+    // two video streams in the PMT with frames 60 s in (e.g. a multi-view program): both, the size from the first
+    const tools = { videoFrames: [[0, 1e9, '1920,1080,1:1', 0], [0, 1e9, '1440,1080,4:3', 30]] };
+    assert.deepStrictEqual(mapsOf('cpu', tools), { status: 0, maps: ['0:0', '0:30'], vf: 'yadif,scale=1920:1080,setsar=1/1' });
+});
+
+test('maps every video stream when no video frame is found where the program\'s video is looked for', () => {
+    assert.deepStrictEqual(mapsOf('cpu', { videoFrames: [] }), { status: 0, maps: ['0:v'], vf: 'yadif' });
+});
+
+test('checks the output duration of a recording whose duration the default probe cannot tell', () => {
+    // the sub-channel's own streams start after the default probe's 5 MB: its duration is N/A (review D18-1)
+    assert.strictEqual(runEnc('exit 0', { inputDuration: '300', defaultProbeDuration: 'N/A', outputDuration: '100' }), 1);
+    assert.strictEqual(runEnc('exit 0', { inputDuration: '300', defaultProbeDuration: 'N/A', outputDuration: '300' }), 0);
 });
 
 test('cancelling stops ffmpeg even though EPGStation closes the output pipes first', async t => {
