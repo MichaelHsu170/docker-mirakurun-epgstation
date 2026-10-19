@@ -37,7 +37,7 @@ const path = require('path');
  *   the program's own (video 10, captions 12).
  *   pmtStreams lists the streams that ffprobe prints under programs (null: every stream). It is not the PMT where the
  *   input is read (review D22-2): on real BS日テレ 142 switches it still held the earlier PMT's video and caption
- *   streams, but not its audio stream, whose last 2 packets (the audio ended 6 s in) ffprobe still printed in the
+ *   streams (on TOKYO MX switches only the program's own streams, review D23-2), but not its audio stream, whose last 2 packets (the audio ended 6 s in) ffprobe still printed in the
  *   60-65 s window (audioPackets [0, 1e9] models that).
  * - ffmpeg answers the dual-mono check (-v error -dual_mono_mode main/sub) as the real ffmpeg does with the
  *   arguments that check gives ([-ss <seconds>] -i ... -t <seconds> -f s16le): it writes the audio from the -ss

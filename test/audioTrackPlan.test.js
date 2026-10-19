@@ -96,7 +96,8 @@ test('judges an input of unknown duration, as a stream\'s probe window, on its f
         ...NO_SPLIT,
         audioMapArgs: ['-map', '0:a:0'],
     });
-    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[5.5, false], [60, true]] }, [], false, NaN), NO_SPLIT);
+    // a recording of unknown duration is judged 60 s in, as a long one (review D23-1)
+    assert.deepStrictEqual(await plan(t, { audioStreams: 1, dualMono: [[5.5, false], [60, true]] }, [], false, NaN), SPLIT);
 });
 
 test('maps every audio stream when there are several, without checking for dual mono', async t => {
@@ -183,9 +184,12 @@ test('looks for the program\'s audio streams on the 5 s from 60 s in, or the las
     assert.deepStrictEqual(await leadIn(61, 300), BOTH);
     assert.deepStrictEqual(await leadIn(19, 30), ONE);
     assert.deepStrictEqual(await leadIn(26, 30), BOTH);
-    // a recording of 5 s or less, or of unknown length, keeps every stream
+    // a recording of 5 s or less keeps every stream; one of unknown length is looked at 60 s in (review D23-1)
     assert.deepStrictEqual(await leadIn(2, 5), BOTH);
-    assert.deepStrictEqual(await leadIn(2, NaN), BOTH);
+    assert.deepStrictEqual(
+        await plan(t, { audioStreams: 2, audioPackets: [[0, 300], [0, 2]], dualMono: false }, [], false, NaN),
+        ONE,
+    );
 });
 
 test('maps every audio stream when none has packets where the program is looked for', async t => {

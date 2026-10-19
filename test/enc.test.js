@@ -440,10 +440,11 @@ test('takes the program\'s size from the last 5 s of a recording shorter than 65
     assert.deepStrictEqual(videoFilterOf('cpu', tools), { status: 0, vf: 'yadif,scale=720:480,setsar=32/27' });
 });
 
-test('takes the size from the start of a recording of unknown duration', () => {
+test('takes the size from 60 s in for a recording of unknown duration, as for a long one', () => {
+    // its start can be the previous program (review D23-1)
     assert.deepStrictEqual(videoFilterOf('cpu', { inputDuration: 'N/A', videoFrames: HD_LEAD_IN }), {
         status: 0,
-        vf: 'yadif,scale=1440:1080,setsar=4/3',
+        vf: 'yadif,scale=720:480,setsar=32/27',
     });
 });
 
@@ -496,6 +497,21 @@ const SUB_CHANNEL = {
     outputAudioDuration: '00:04:54.500000000',
 };
 
+test('encodes the program\'s own video and audio of a sub-channel recording of unknown duration', () => {
+    // after the switch to the program's PIDs the broadcast clock wrapped, so ffprobe gives no duration (review D23-1)
+    const { status, args } = ffmpegArgsOf('cpu', {
+        ...SUB_CHANNEL,
+        inputDuration: 'N/A',
+        videoFrames: [[0, 5.5, '1440,1080,4:3', 0], [5.5, 1e9, '720,480,32:27', 30]],
+        audioPackets: [[0, 5.5], [5.5, 1e9]],
+        pmtStreams: [11, 30],
+    });
+    assert.strictEqual(status, 0);
+    // the output's video and audio (the caption input's maps start with 1:)
+    const maps = args.flatMap((a, i) => (a === '-map' && args[i + 1].startsWith('0:') ? [args[i + 1]] : []));
+    assert.deepStrictEqual(maps, ['0:30', '0:a:1']);
+});
+
 test('leaves out a video stream that is only in the lead-in', () => {
     // the main channel's streams stop at the switch: the 60 s window decides
     const tools = {
@@ -545,7 +561,7 @@ test('encodes every caption stream when the program\'s video is not found 60 s i
     assert.deepStrictEqual(args.slice(args.indexOf('-c:s') - 4, args.indexOf('-c:s')), ['-map', '1:3', '-map', '1:33']);
 });
 
-test('encodes a recording without a caption stream (CS channels), where the caption probe fails', () => {
+test('encodes a recording without a caption stream (CS channels)', () => {
     const { status, args } = ffmpegArgsOf('cpu', { subtitleStreams: [] });
     assert.strictEqual(status, 0);
     assert.deepStrictEqual(args.slice(args.indexOf('-c:s') - 2, args.indexOf('-c:s')), ['-map', '1:s?']);

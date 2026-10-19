@@ -89,12 +89,13 @@ async function audioTrackPlan(ffprobePath, ffmpegPath, inputPath, inputArgs = []
 
 /**
  * 番組の中を判定する位置 (秒): DUAL_MONO_JUDGE_START、それより短い録画は末尾の DUAL_MONO_DECODE_SECONDS 秒の始まり。
- * 0 以下 (長さが分からない NaN も) なら先頭から判定する
+ * 0 以下 (ストリーム) なら先頭から判定する。長さが分からない録画 (NaN: サブチャンネルの録画が番組の PID に切り替わった後に
+ * 放送の時刻が一巡すると ffprobe は長さを出さない) は長い録画として扱う (先頭は前の番組のことがある)
  * @param {number} inputDuration 入力の長さ (秒)
  * @return {number}
  */
 function programJudgeStart(inputDuration) {
-    return Math.min(DUAL_MONO_JUDGE_START, inputDuration - DUAL_MONO_DECODE_SECONDS);
+    return Number.isNaN(inputDuration) ? DUAL_MONO_JUDGE_START : Math.min(DUAL_MONO_JUDGE_START, inputDuration - DUAL_MONO_DECODE_SECONDS);
 }
 
 /**
