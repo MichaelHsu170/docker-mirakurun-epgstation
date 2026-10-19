@@ -15,6 +15,13 @@ const { execFile, spawn } = require('child_process');
 const DUAL_MONO_JUDGE_START = 60;
 const DUAL_MONO_DECODE_SECONDS = 5;
 
+// ストリーム検出の入力オプション。既定 (5 MB, BS で約 2 秒分) では、PMT にあってもデータの始まりが遅い
+// 音声 (副音声など) が見つからず、srcs/ffmpeg ではそのストリームが破棄されて出力から黙って欠ける
+// (映像も: サブチャンネルの録画の、番組の始めに移る自分の PID の映像は map できない)。
+// 入力はシーク可能な録画ファイルなので先頭 30 秒分まで探す (200 MB は BS の最大ビットレート
+// 約 24 Mbps でも 60 秒分以上あり、30 秒より先に打ち切られない)
+const PROBE_ARGS = ['-analyzeduration', '30M', '-probesize', '200M'];
+
 /**
  * 音声ストリーム数と二カ国語判定 (PCEのdual-mono判定はデコードしないと分からないため
  * 実際に -dual_mono_mode main/sub でデコードして比較する) に基づき、ffmpeg の
@@ -339,4 +346,4 @@ function decodeAudio(ffmpegPath, inputPath, mode, inputArgs, judgeStart, track) 
     });
 }
 
-module.exports = { audioTrackPlan, getAudioStreamCount, programVideoSize, programSubtitleStreams };
+module.exports = { audioTrackPlan, getAudioStreamCount, programVideoSize, programSubtitleStreams, PROBE_ARGS };

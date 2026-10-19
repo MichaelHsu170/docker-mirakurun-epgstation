@@ -38,6 +38,11 @@ thumbnailSize: 480x270
 # DUAL_MONO_JUDGE_START) ため、番組の中の 60 秒目を使う。60 秒より短い録画にはサムネイルが作られない
 # (ffmpeg がフレームなしで失敗し、system.log に create thumbnail cmd error が出る)
 thumbnailPosition: 60
+# サブチャンネル (NHK BS 102、BS日テレ 142 など) の自分の番組の録画は先頭がメインチャンネルの映像 (別の PID) で、
+# 既定のコマンドはその映像を選んで 60 秒目のフレームがなく失敗するため、番組の映像 (enc.js と同じく 60 秒目の番組の
+# PMT にある映像) から取る。それ以外の録画では既定のコマンド
+# (%FFMPEG% -ss %THUMBNAIL_POSITION% -y -i %INPUT% -vframes 1 -f image2 -s %THUMBNAIL_SIZE% %OUTPUT%) と同じ画像になる
+thumbnailCmd: '%NODE% %ROOT%/scripts/thumbnail.js %FFMPEG% %INPUT% %OUTPUT% %THUMBNAIL_POSITION% %THUMBNAIL_SIZE%'
 
 ffmpeg: /usr/local/bin/ffmpeg
 ffprobe: /usr/local/bin/ffprobe

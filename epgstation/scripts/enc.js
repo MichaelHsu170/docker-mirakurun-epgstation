@@ -1,6 +1,6 @@
 const spawn = require('child_process').spawn;
 const execFile = require('child_process').execFile;
-const { audioTrackPlan, programVideoSize, programSubtitleStreams } = require('./lib/audioTrackPlan.js');
+const { audioTrackPlan, programVideoSize, programSubtitleStreams, PROBE_ARGS } = require('./lib/audioTrackPlan.js');
 const ffmpeg = process.env.FFMPEG;
 const ffprobe = process.env.FFPROBE;
 
@@ -17,12 +17,6 @@ const USE_GPU = process.argv[2] !== 'cpu';
 // 音声が先頭の数秒しかない出力。実測で正常なエンコードの差は 0.5 秒以下、音声のない出力は 3400 秒以上)。
 // 無音の部分にも音声のパケットはあり、タイムスタンプの飛びを詰めた分は映像と音声の両方から詰められるため差にならない
 const MAX_MISSING_SECONDS = 5;
-
-// ストリーム検出の入力オプション。既定 (5 MB, BS で約 2 秒分) では、PMT にあってもデータの始まりが遅い
-// 音声 (副音声など) が見つからず、srcs/ffmpeg ではそのストリームが破棄されて出力から黙って欠ける。
-// 入力はシーク可能な録画ファイルなので先頭 30 秒分まで探す (200 MB は BS の最大ビットレート
-// 約 24 Mbps でも 60 秒分以上あり、30 秒より先に打ち切られない)
-const PROBE_ARGS = ['-analyzeduration', '30M', '-probesize', '200M'];
 
 // 1つ目の入力 (映像と音声) を読む速さの上限 (再生速度の 12 倍)。ffmpeg 9 は1つの入力の映像と音声を実時間より
 // 速くデコードすると、エンコードに使われる前に読んだ分をメモリに溜め、番組の長さに比例して増える (1 時間あたり

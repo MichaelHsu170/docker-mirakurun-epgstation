@@ -23,7 +23,10 @@ const path = require('path');
  *   time, here 1000 s at the start of the input, plus the start of the stream's first part). videoFrames gives the parts of the video as
  *   [from, to, '<width>,<height>,<sar>', <stream index, default 0>] (a lead-in of the previous program's size:
  *   [0, 15, '720,480,32:27']); the default is 1440x1080 SAR 4:3 throughout, [] no frame at all, and 'fail' makes
- *   that call fail.
+ *   that call fail. Without -probesize (the default 5 MB probe, about 2 s of BS) it lists no frame of a video stream
+ *   whose first part starts 2 s or more into the input: on a real BS日テレ 142 recording (the main channel's lead-in
+ *   on stream 0 for 4.8 s, then the program's own 720x480 stream 9), the default probe did not report stream 9
+ *   (review D21-1).
  *   With -select_streams s and -read_intervals it prints the caption streams (subtitleStreams, indexes; none by
  *   default) that the PMT lists, under programs; for a recording without a caption stream (CS channels) it fails
  *   as the real ffprobe does ("Could not seek ...: Operation not permitted", exit 1; review C19-1).
@@ -72,6 +75,13 @@ const writeFakeTools = (
     // "<stream index> <from> <to> <width>,<height>,<sar>" for every part of the video
     const videoParts = videoFrames === 'fail' ? [] : videoFrames.map(([from, to, size, index = 0]) => [index, from, to, size]);
     const frames = videoParts.map(part => part.join(' ')).join('\\n');
+    // the frames that the default probe (no -probesize: 5 MB, about 2 s of BS) finds: none of a video stream that
+    // starts later (a sub-channel program's own video after the main channel's lead-in)
+    const firstStart = index => Math.min(...videoParts.filter(part => part[0] === index).map(part => part[1]));
+    const defaultProbeFrames = videoParts
+        .filter(part => firstStart(part[0]) < 2)
+        .map(part => part.join(' '))
+        .join('\\n');
     // the streams of a type (indexes) that the PMT lists, as ffprobe prints them under programs
     const pmt = indexesOfType =>
         JSON.stringify([{ streams: indexesOfType.filter(index => pmtStreams === null || pmtStreams.includes(index)).map(index => ({ index })) }]);
@@ -98,7 +108,8 @@ const writeFakeTools = (
             'if [ -n "$ri" ] && [ "$sel" = v ]; then\n' +
             (videoFrames === 'fail'
                 ? '  exit 1\n'
-                : `  printf '{"frames":[%s],"programs":%s,"streams":%s}\\n' "$([ -n '${frames}' ] && printf '${frames}\\n' | ` +
+                : `  f='${frames}'; [ -z "$ps" ] && f='${defaultProbeFrames}'\n` +
+                  `  printf '{"frames":[%s],"programs":%s,"streams":%s}\\n' "$([ -n "$f" ] && printf "$f\\n" | ` +
                   `${inInterval(`(split($4, f, ",") ? ${frameItem} : "")`)})" '${videoPmt}' '${videoStreams}'\n`) +
             '  exit 0\nfi\n' +
             'if [ -n "$ri" ] && [ "$sel" = s ]; then\n' +
