@@ -124,11 +124,10 @@ test('splits a dual-mono program recorded after a program with two audio streams
     );
 });
 
-// a sub-channel recorded while Mirakurun passed every PID the PMT ever listed (review D18-1: NHK BS 102 after a
-// simulcast slot with 101): the main channel's audio (stream 1) has packets throughout, but the PMT lists only the
-// sub-channel's own (11)
-test('maps only the audio stream that the program\'s PMT lists when another program\'s has packets too', async t => {
-    const tools = { audioStreams: 2, audioPackets: [[0, 300], [5.5, 300]], pmtStreams: [11, 30] };
+// BS日テレ 142's recording of a simulcast program after its own (review D22-2): the lead-in's own audio (stream 1)
+// ended 6 s in, yet ffprobe printed 2 of its packets in the 60-65 s window; its programs listed only the program's (11)
+test('maps only the audio stream that ffprobe\'s programs list when a lead-in stream shows packets in the window', async t => {
+    const tools = { audioStreams: 2, audioPackets: [[0, 1e9], [6, 1e9]], pmtStreams: [11, 30] };
     assert.deepStrictEqual(await plan(t, { ...tools, dualMono: false }, [], false, 300), {
         filterComplex: null,
         audioMapArgs: ['-map', '0:a:1'],

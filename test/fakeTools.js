@@ -13,27 +13,32 @@ const path = require('path');
  *   ffmpegScript that models how long ffmpeg's audio output is). It answers after probeSeconds seconds.
  *   With -read_intervals +<start>%+<seconds> it prints the audio packets in that part of the input as the real
  *   ffprobe does with -show_entries packet=stream_index:program_stream=index -of json: a {"stream_index": <index>}
- *   packet (3 here) for every audio stream with packets there, and under programs the audio streams that the
- *   program's PMT lists. audioPackets gives each audio stream's [from, to] seconds with packets (a 2nd audio stream
- *   of the previous program only in the recording's lead-in: [0, 5]); without it every stream has packets throughout.
+ *   packet (3 here) for every audio stream with packets there, and under programs the audio streams of pmtStreams.
+ *   audioPackets gives each audio stream's [from, to] seconds with packets (a
+ *   2nd audio stream of the previous program only in the recording's lead-in: [0, 5]); without it every stream has
+ *   packets throughout.
  *   With -select_streams v and -read_intervals it prints instead the video frames in that part of the input
- *   (frame=stream_index,width,height,sample_aspect_ratio:program_stream=index, json) as the real ffprobe does: a
- *   frame (3 here per part) with its stream index, width, height and SAR (no SAR where it is N/A), under programs
- *   the video streams that the PMT lists, and under streams every video stream with its start_time (the broadcast's
- *   time, here 1000 s at the start of the input, plus the start of the stream's first part). videoFrames gives the parts of the video as
+ *   (frame=stream_index,width,height,sample_aspect_ratio:program_stream=index:stream=index,start_time, json) as the
+ *   real ffprobe does: a frame (3 here per part) with its stream index, width, height and SAR (no SAR where it is
+ *   N/A), under programs the video streams of pmtStreams, and under streams
+ *   every video stream with its start_time (the broadcast's time, here 1000 s at the start of the input, plus the
+ *   start of the stream's first part). videoFrames gives the parts of the video as
  *   [from, to, '<width>,<height>,<sar>', <stream index, default 0>] (a lead-in of the previous program's size:
  *   [0, 15, '720,480,32:27']); the default is 1440x1080 SAR 4:3 throughout, [] no frame at all, and 'fail' makes
- *   that call fail. Without -probesize (the default 5 MB probe, about 2 s of BS) it lists no frame of a video stream
- *   whose first part starts 2 s or more into the input: on a real BS日テレ 142 recording (the main channel's lead-in
- *   on stream 0 for 4.8 s, then the program's own 720x480 stream 9), the default probe did not report stream 9
- *   (review D21-1).
- *   With -select_streams s and -read_intervals it prints the caption streams (subtitleStreams, indexes; none by
- *   default) that the PMT lists, under programs; for a recording without a caption stream (CS channels) it fails
- *   as the real ffprobe does ("Could not seek ...: Operation not permitted", exit 1; review C19-1).
- *   pmtStreams lists the stream indexes the program's PMT has where it is read (null: every video, audio and caption
- *   stream). A recording of a sub-channel made while Mirakurun passed every PID the PMT ever listed (review D18-1)
- *   has the main channel's video 0 and audio 1 throughout, the program's own (e.g. video 30, audio 31) from the
- *   end of the lead-in, and the PMT lists only the program's own.
+ *   that call fail. Without -probesize (the default 5 MB probe) it lists no frame of a video stream whose first part
+ *   starts 2 s or more into the input. What the real default probe misses is a stream that a later PMT adds: a
+ *   sub-channel program's own video after the main channel's lead-in (BS日テレ 142: stream 9 from 4.8-5.6 s in;
+ *   review D21-1, D22-2), which starts at the switch in a recording. A stream of the first PMT whose data starts late
+ *   is still found 4.3 s in (and at 8.5 s in, the probe fails instead); no test has one.
+ *   With -select_streams s (and -show_entries stream=index, no -read_intervals) it prints the caption streams
+ *   (subtitleStreams, indexes; none by default: an empty list, as the real ffprobe prints for a CS recording). The
+ *   real ffmpeg numbers a recording's streams in the order of its PMT (video first) and those that a later PMT adds
+ *   after them, so a sub-channel recording has the main channel's lead-in streams (e.g. video 1, captions 3) before
+ *   the program's own (video 10, captions 12).
+ *   pmtStreams lists the streams that ffprobe prints under programs (null: every stream). It is not the PMT where the
+ *   input is read (review D22-2): on real BS日テレ 142 switches it still held the earlier PMT's video and caption
+ *   streams, but not its audio stream, whose last 2 packets (the audio ended 6 s in) ffprobe still printed in the
+ *   60-65 s window (audioPackets [0, 1e9] models that).
  * - ffmpeg answers the dual-mono check (-v error -dual_mono_mode main/sub) as the real ffmpeg does with the
  *   arguments that check gives ([-ss <seconds>] -i ... -t <seconds> -f s16le): it writes the audio from the -ss
  *   position (0 without it) for the -t seconds or to the end of the audio, whichever comes first, as 192000 bytes of
@@ -82,11 +87,10 @@ const writeFakeTools = (
         .filter(part => firstStart(part[0]) < 2)
         .map(part => part.join(' '))
         .join('\\n');
-    // the streams of a type (indexes) that the PMT lists, as ffprobe prints them under programs
+    // the streams of a type (indexes) that ffprobe prints under programs
     const pmt = indexesOfType =>
         JSON.stringify([{ streams: indexesOfType.filter(index => pmtStreams === null || pmtStreams.includes(index)).map(index => ({ index })) }]);
     const videoIndexes = [...new Set(videoParts.map(part => part[0]))];
-    const videoPmt = pmt(videoIndexes);
     const videoStreams = JSON.stringify(
         videoIndexes.map(index => ({ index, start_time: String(1000 + Math.min(...videoParts.filter(part => part[0] === index).map(part => part[1]))) })),
     );
@@ -110,12 +114,10 @@ const writeFakeTools = (
                 ? '  exit 1\n'
                 : `  f='${frames}'; [ -z "$ps" ] && f='${defaultProbeFrames}'\n` +
                   `  printf '{"frames":[%s],"programs":%s,"streams":%s}\\n' "$([ -n "$f" ] && printf "$f\\n" | ` +
-                  `${inInterval(`(split($4, f, ",") ? ${frameItem} : "")`)})" '${videoPmt}' '${videoStreams}'\n`) +
+                  `${inInterval(`(split($4, f, ",") ? ${frameItem} : "")`)})" '${pmt(videoIndexes)}' '${videoStreams}'\n`) +
             '  exit 0\nfi\n' +
-            'if [ -n "$ri" ] && [ "$sel" = s ]; then\n' +
-            (subtitleStreams.length === 0
-                ? "  echo 'Could not seek to 60.000000: Operation not permitted' >&2; exit 1\n"
-                : `  printf '%s\\n' '{"packets":[],"programs":${pmt(subtitleStreams)}}'\n`) +
+            'if [ "$sel" = s ]; then\n' +
+            `  printf '%s\\n' '${JSON.stringify({ streams: subtitleStreams.map(index => ({ index })) })}'\n` +
             '  exit 0\nfi\n' +
             'if [ -n "$ri" ]; then\n' +
             `  printf '{"packets":[%s],"programs":%s}\\n' "$([ -n '${packets}' ] && printf '${packets}\\n' | ` +

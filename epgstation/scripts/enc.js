@@ -1,6 +1,6 @@
 const spawn = require('child_process').spawn;
 const execFile = require('child_process').execFile;
-const { audioTrackPlan, programVideoSize, programSubtitleStreams, PROBE_ARGS } = require('./lib/audioTrackPlan.js');
+const { audioTrackPlan, getDuration, programVideoSize, programSubtitleStreams, PROBE_ARGS } = require('./lib/audioTrackPlan.js');
 const ffmpeg = process.env.FFMPEG;
 const ffprobe = process.env.FFPROBE;
 
@@ -66,35 +66,9 @@ const getAudioDuration = filePath => {
     });
 };
 
-/**
- * 動画長取得関数
- * @param {string} filePath ファイルパス
- * @param {string[]} [inputArgs] 入力オプション (録画には PROBE_ARGS: 既定の 5 MB より後に始まるストリーム (サブチャンネルが
- *   番組の始めに移る自分の PID) があると長さが N/A になり、長さの判定がすべて飛ばされる)
- * @return number 動画長を返す (秒)
- */
-const getDuration = (filePath, inputArgs = []) => {
-    return new Promise((resolve, reject) => {
-        execFile(ffprobe, ['-v', '0', ...inputArgs, '-show_format', '-of', 'json', filePath], (err, stdout) => {
-            if (err) {
-                reject(err);
-
-                return;
-            }
-
-            try {
-                const result = JSON.parse(stdout);
-                resolve(parseFloat(result.format.duration));
-            } catch (err) {
-                reject(err);
-            }
-        });
-    });
-};
-
 (async () => {
     // 進捗計算のために動画の長さを取得
-    const duration = await getDuration(input, PROBE_ARGS);
+    const duration = await getDuration(ffprobe, input, PROBE_ARGS);
     // 音声ストリーム構成 (実ストリーム数・二カ国語判定) を実際にデコードして判定する。
     // EPG由来のメタデータ (AUDIOCOMPONENTTYPE) は誤りや欠落があり得るため信頼しない。
     // 二カ国語と map する音声ストリームは先頭 (前の番組の音声が入る) ではなく番組の中の音声で判定する
@@ -103,7 +77,7 @@ const getDuration = (filePath, inputArgs = []) => {
     // 番組の映像ストリームと大きさ (先頭の前の番組の部分ではなく、二カ国語と同じく番組の中で判定する)
     const videoSize = await programVideoSize(ffprobe, input, PROBE_ARGS, duration);
     // 番組の字幕ストリーム (サブチャンネルの録画の先頭のメインチャンネルの字幕を除く)
-    const subtitleStreams = await programSubtitleStreams(ffprobe, input, PROBE_ARGS, duration);
+    const subtitleStreams = await programSubtitleStreams(ffprobe, input, PROBE_ARGS, videoSize === null ? undefined : videoSize.streams[0]);
 
     const args = ['-y'];
     // NVidia GPU
@@ -150,7 +124,8 @@ const getDuration = (filePath, inputArgs = []) => {
             Array.prototype.push.apply(args, ['-metadata:s:a:0', 'language=jpn', '-metadata:s:a:1', 'language=eng']);
         }
     }
-    // 字幕ストリーム設定: 番組の PMT にある字幕 (2つ目の入力のストリーム番号は1つ目と同じ)。分からなければ全ての字幕
+    // 字幕ストリーム設定: 番組の字幕 (programSubtitleStreams。2つ目の入力のストリーム番号は1つ目と同じ)。字幕ストリームが
+    // なければ 1:s? (何も map しない)
     const subtitleMapArgs = subtitleStreams === null ? ['-map', '1:s?'] : subtitleStreams.flatMap(index => ['-map', `1:${index}`]);
     Array.prototype.push.apply(args, [...subtitleMapArgs, '-c:s', 'srt']);
     // 品質設定 (libx264のみ、h264_nvencでは-crfが無効なため)
@@ -317,7 +292,7 @@ const getDuration = (filePath, inputArgs = []) => {
             return;
         }
         try {
-            const outputDuration = await getDuration(output);
+            const outputDuration = await getDuration(ffprobe, output);
             const closedSeconds = Math.max(0, -discontinuityOffset / 1e6);
             const leadInSeconds = videoSize === null ? 0 : videoSize.leadInSeconds;
             const programDuration = duration - leadInSeconds;

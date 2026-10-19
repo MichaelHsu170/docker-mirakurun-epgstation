@@ -8,10 +8,10 @@ const { execFile, spawn } = require('child_process');
 // 長さの分からない入力 (ストリームの判定ウィンドウ) は先頭から判定する。番組の映像の大きさ (programVideoSize) も同じ区間で判定する。
 // 音声ストリームが2以上の録画は、同じ区間にパケットのあるストリームを番組の音声とする (前の番組の2本目の音声は
 // 前の番組の部分にしかなく、map すると番組の間は空のトラックになり、ffmpeg 9 はそれを待って入力をメモリに溜め続ける)。
-// 映像も同じ区間にフレームのあるストリームを番組の映像とする。どちらも (字幕も) 同じ区間の番組の PMT (録画の TS には Mirakurun が
-// 番組のサービスの PMT だけを残す) にないストリームは除く: サブチャンネル (NHK BS 102、BS日テレ 142、tvk2 など) は
-// メインチャンネルとの同時放送の間はその PID を使い、自分の番組では自分の PID に移る。Mirakurun が PMT から消えた PID を
-// 渡し続けていた間 (review D18-1) の録画は、メインチャンネルの番組も録画の終わりまで持つ
+// 映像も同じ区間にフレームのあるストリームを番組の映像とする。どちらも ffprobe の programs (pmtStreamIndexes) にない
+// ストリームは除く: サブチャンネル (NHK BS 102、BS日テレ 142、tvk2 など) はメインチャンネルとの同時放送の間はその PID を
+// 使い、自分の番組では自分の PID に移る (Mirakurun は PMT から消えた PID を止める)。字幕は番組の映像より後の番号の
+// ストリームとする (programSubtitleStreams)
 const DUAL_MONO_JUDGE_START = 60;
 const DUAL_MONO_DECODE_SECONDS = 5;
 
@@ -29,7 +29,7 @@ const PROBE_ARGS = ['-analyzeduration', '30M', '-probesize', '200M'];
  *
  * - 実音声ストリームが2以上: そのまま全て -map する (既に別個の言語トラックのため
  *   channelsplit 等の加工は不要。加工すると重複/誤ったトラックを生む)。ただし長さが分かれば判定区間に
- *   パケットがあり番組の PMT にあるストリームだけを使う (無ければ全て)。それが1本なら以下の1本の場合と同じ
+ *   パケットがあり ffprobe の programs にあるストリームだけを使う (無ければ全て)。それが1本なら以下の1本の場合と同じ
  * - 実音声ストリームが1で二カ国語: channelsplit で2トラックに分離する
  * - 実音声ストリームが1で二カ国語でない: そのまま1トラックとして -map する
  * - 実音声ストリームが0: 音声を一切 map しない
@@ -98,9 +98,10 @@ function programJudgeStart(inputDuration) {
 }
 
 /**
- * ffprobe の JSON 出力 (-show_entries ...:program_stream=index) の programs にあるストリーム番号: 読んだ区間の最後の
- * PMT にあるストリームのうち -select_streams で選んだもの (ffmpeg は PMT が変わるとプログラムのストリームを
- * 入れ替える)。
+ * ffprobe の JSON 出力 (-show_entries ...:program_stream=index) の programs にあるストリーム番号のうち -select_streams で
+ * 選んだもの。読んだ区間の PMT のストリームとは限らない (review D22-2): BS日テレ 142 の録画では、前の版の PMT の映像と
+ * 字幕も残っていた (同時放送から自分の番組へも、その逆も)。逆の切り替えの録画では前の PMT の音声は残らず、ffprobe が
+ * 判定区間に出す前の番組の音声の古いパケット (先頭 6 秒で終わった音声の 2 パケット) をこれで除く。
  * @param {object} result ffprobe の JSON 出力
  * @return {Set<number>|null} 1つもなければ null (絞り込まない)
  */
@@ -111,20 +112,21 @@ function pmtStreamIndexes(result) {
 
 /**
  * 番組の映像: 音声と同じ判定区間 (programJudgeStart から DUAL_MONO_DECODE_SECONDS 秒) にフレームがあり、
- * 番組の PMT にある映像ストリームと、その最初の (SAR の分かる) フレームの幅、高さ、SAR。録画の先頭の前の番組の部分は、
- * 番組と大きさが違うことがある (1080i と 480i を切り替える NHK BS 102、tvk2 などのサブチャンネル)。前の番組の部分にしか
- * ない映像ストリーム (サブチャンネルの番組の前のメインチャンネルの PID) や、PMT にない別の番組の映像は含まない。
+ * ffprobe の programs (pmtStreamIndexes) にある映像ストリームと、その最初の (SAR の分かる) フレームの幅、高さ、SAR。
+ * 録画の先頭の前の番組の部分は、番組と大きさが違うことがある (1080i と 480i を切り替える NHK BS 102、tvk2 などの
+ * サブチャンネル)。前の番組の部分にしかない映像ストリーム (サブチャンネルの番組の前のメインチャンネルの PID) は含まない。
  * read_intervals の + は入力の先頭からの位置 (付けないと放送のタイムスタンプそのものになる)
  * @param {string} ffprobePath
  * @param {string} inputPath
  * @param {string[]} inputArgs 入力オプション
  * @param {number} inputDuration 入力の長さ (秒)
+ * @param {AbortSignal} [signal] abort されると ffprobe を SIGKILL で止める (Promise は reject される)
  * @return {Promise<{width: number, height: number, sar: string, streams: number[], leadInSeconds: number}|null>}
  *   sar は "4/3" の形。streams は入力内のストリーム番号 (小さい順)。leadInSeconds は最初の映像の始まりから番組の映像の
  *   始まりまでの秒数 (前の番組の映像が別のストリームの録画で、その部分はエンコードされない。それ以外は 0)。
  *   判定区間に SAR の分かるフレームがなければ null
  */
-function programVideoSize(ffprobePath, inputPath, inputArgs, inputDuration) {
+function programVideoSize(ffprobePath, inputPath, inputArgs, inputDuration, signal) {
     const judgeStart = programJudgeStart(inputDuration);
     return new Promise((resolve, reject) => {
         execFile(
@@ -138,6 +140,7 @@ function programVideoSize(ffprobePath, inputPath, inputArgs, inputDuration) {
                 '-of', 'json',
                 inputPath,
             ],
+            { signal, killSignal: 'SIGKILL' },
             (err, stdout) => {
                 if (err) {
                     reject(err);
@@ -174,43 +177,65 @@ function programVideoSize(ffprobePath, inputPath, inputArgs, inputDuration) {
 }
 
 /**
- * 番組の字幕: 判定区間 (programVideoSize と同じ) の番組の PMT にある字幕ストリーム。サブチャンネルの録画の先頭の
- * メインチャンネルの字幕 (別の PID) は含まない。
+ * 番組の字幕: 番組の映像 (programVideoSize の streams の最初) より後の番号の字幕ストリーム。ffmpeg は PMT にある
+ * ストリームに PMT の順 (映像が最初) に番号を付け、PMT が変わって加わったストリームにはその後の番号を付けるため、
+ * サブチャンネルの録画の先頭のメインチャンネルの字幕 (番組の映像より前の PMT にある別の PID) は番組の映像より前の
+ * 番号になり、含まない。それ以外の録画では全ての字幕。
+ * 判定区間にパケットのある字幕は使えない (字幕のない番組の字幕ストリームにはパケットがなく、それだけ外すと
+ * 普通の録画の出力も変わる)。ffprobe の programs は前の PMT の字幕も持つ。PID の並び (BS日テレ 142 の 0x240 と 0x245) も使えない (NHK は映像 0x100 と字幕 0x130、
+ * CS は 0x100c と 0x120c)
  * @param {string} ffprobePath
  * @param {string} inputPath
  * @param {string[]} inputArgs 入力オプション
- * @param {number} inputDuration 入力の長さ (秒)
- * @return {Promise<number[]|null>} 入力内のストリーム番号 (PMT の順)。PMT に字幕がないか読めなければ null
+ * @param {number} [videoStream] 番組の映像のストリーム番号 (分からなければ全ての字幕)
+ * @return {Promise<number[]|null>} 入力内のストリーム番号 (小さい順)。字幕ストリームがなければ null
  */
-function programSubtitleStreams(ffprobePath, inputPath, inputArgs, inputDuration) {
-    const judgeStart = programJudgeStart(inputDuration);
+function programSubtitleStreams(ffprobePath, inputPath, inputArgs, videoStream = -1) {
     return new Promise((resolve, reject) => {
         execFile(
             ffprobePath,
-            [
-                '-v', 'error',
-                ...inputArgs,
-                '-read_intervals', `+${judgeStart > 0 ? judgeStart : 0}%+${DUAL_MONO_DECODE_SECONDS}`,
-                '-select_streams', 's',
-                '-show_entries', 'packet=stream_index:program_stream=index',
-                '-of', 'json',
-                inputPath,
-            ],
+            ['-v', 'error', ...inputArgs, '-select_streams', 's', '-show_entries', 'stream=index', '-of', 'json', inputPath],
             (err, stdout) => {
                 if (err) {
-                    // 字幕ストリームのない録画 (CS) では -select_streams s で選ぶものがなく、ffprobe は判定区間へ
-                    // シークできずに失敗する
-                    resolve(null);
+                    reject(err);
                     return;
                 }
                 try {
-                    const pmt = pmtStreamIndexes(JSON.parse(stdout));
-                    resolve(pmt === null ? null : [...pmt]);
+                    const indexes = (JSON.parse(stdout).streams || []).map(stream => stream.index);
+                    resolve(indexes.length === 0 ? null : indexes.filter(index => index > videoStream));
                 } catch (e) {
                     reject(e);
                 }
             },
         );
+    });
+}
+
+/**
+ * 動画長取得関数
+ * @param {string} ffprobePath
+ * @param {string} filePath ファイルパス
+ * @param {string[]} [inputArgs] 入力オプション (録画には PROBE_ARGS: 既定の 5 MB より後に始まるストリーム (サブチャンネルが
+ *   番組の始めに移る自分の PID) があると長さが N/A になり、長さの判定がすべて飛ばされる)
+ * @param {AbortSignal} [signal] abort されると ffprobe を SIGKILL で止める (Promise は reject される)
+ * @return {Promise<number>} 動画長を返す (秒。分からなければ NaN)
+ */
+function getDuration(ffprobePath, filePath, inputArgs = [], signal) {
+    return new Promise((resolve, reject) => {
+        execFile(ffprobePath, ['-v', '0', ...inputArgs, '-show_format', '-of', 'json', filePath], { signal, killSignal: 'SIGKILL' }, (err, stdout) => {
+            if (err) {
+                reject(err);
+
+                return;
+            }
+
+            try {
+                const result = JSON.parse(stdout);
+                resolve(parseFloat(result.format.duration));
+            } catch (err) {
+                reject(err);
+            }
+        });
     });
 }
 
@@ -252,7 +277,7 @@ function getAudioStreamIndexes(ffprobePath, inputPath, inputArgs) {
 }
 
 /**
- * judgeStart 秒目から DUAL_MONO_DECODE_SECONDS 秒の間にパケットがあり、番組の PMT にある音声ストリームを返す。
+ * judgeStart 秒目から DUAL_MONO_DECODE_SECONDS 秒の間にパケットがあり、ffprobe の programs にある音声ストリームを返す。
  * read_intervals の + は入力の先頭からの位置 (付けないと放送のタイムスタンプそのものになる)
  * @param {string} ffprobePath
  * @param {string} inputPath
@@ -346,4 +371,4 @@ function decodeAudio(ffmpegPath, inputPath, mode, inputArgs, judgeStart, track) 
     });
 }
 
-module.exports = { audioTrackPlan, getAudioStreamCount, programVideoSize, programSubtitleStreams, PROBE_ARGS };
+module.exports = { audioTrackPlan, getAudioStreamCount, getDuration, programVideoSize, programSubtitleStreams, PROBE_ARGS };

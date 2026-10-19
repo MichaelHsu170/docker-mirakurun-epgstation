@@ -487,7 +487,7 @@ const mapsOf = (mode, tools) => {
 
 // NHK BS 102's MLB at 09:00 after a simulcast slot with NHK BS 101 (review D18-1): the recording starts with 5.5 s
 // of the main channel's 1080i video (stream 0) and audio (stream 1), then the sub-channel's own 480i video (30) and
-// audio (11); from then on the PMT lists only the sub-channel's own streams
+// audio (11), which its new PMT adds (Mirakurun stops the main channel's PIDs there)
 // The output starts with the sub-channel's own streams: it is shorter than the recording by the lead-in.
 const SUB_CHANNEL = {
     audioStreams: 2,
@@ -496,42 +496,24 @@ const SUB_CHANNEL = {
     outputAudioDuration: '00:04:54.500000000',
 };
 
-test('encodes only the sub-channel program\'s video and audio when the main channel\'s run to the end of the recording', () => {
-    // recorded while Mirakurun passed every PID the PMT ever listed: the main channel's streams have packets throughout
-    const tools = {
-        ...SUB_CHANNEL,
-        videoFrames: [[0, 1e9, '1440,1080,4:3', 0], [5.5, 1e9, '720,480,32:27', 30]],
-        audioPackets: [[0, 1e9], [5.5, 1e9]],
-        pmtStreams: [11, 30],
-    };
-    assert.deepStrictEqual(mapsOf('cpu', tools), { status: 0, maps: ['0:30', '0:a:1'], vf: 'yadif,scale=720:480,setsar=32/27' });
-    assert.deepStrictEqual(mapsOf('gpu', tools), {
-        status: 0,
-        maps: ['0:30', '0:a:1'],
-        vf: 'yadif_cuda,hwdownload,format=nv12,scale=720:480,setsar=32/27',
-    });
-});
-
 test('leaves out a video stream that is only in the lead-in', () => {
-    // the main channel's streams stop at the switch; no PMT read (pmtStreams lists nothing): the 60 s window decides
+    // the main channel's streams stop at the switch: the 60 s window decides
     const tools = {
         ...SUB_CHANNEL,
         videoFrames: [[0, 5.5, '1440,1080,4:3', 0], [5.5, 1e9, '720,480,32:27', 30]],
         audioPackets: [[0, 5.5], [5.5, 1e9]],
-        pmtStreams: [],
     };
     assert.deepStrictEqual(mapsOf('cpu', tools), { status: 0, maps: ['0:30', '0:a:1'], vf: 'yadif,scale=720:480,setsar=32/27' });
 });
 
-test('encodes only the captions that the program\'s PMT lists', () => {
-    // the main channel's captions (stream 3) run to the end of a recording made before the Mirakurun fix, or end with
-    // the lead-in after it; the sub-channel's own are stream 33
+test('encodes only the program\'s captions, not the main channel\'s of the lead-in', () => {
+    // the main channel's caption stream (3, from the first PMT) stays in ffprobe's stream list (and in its programs:
+    // review D22-2); the sub-channel's own are stream 33, which its PMT adds with its video 30
     const { status, args } = ffmpegArgsOf('cpu', {
         ...SUB_CHANNEL,
         videoFrames: [[0, 5.5, '1440,1080,4:3', 0], [5.5, 1e9, '720,480,32:27', 30]],
         audioPackets: [[0, 5.5], [5.5, 1e9]],
         subtitleStreams: [3, 33],
-        pmtStreams: [11, 30, 33],
     });
     assert.strictEqual(status, 0);
     assert.deepStrictEqual(args.slice(args.indexOf('-c:s') - 2, args.indexOf('-c:s')), ['-map', '1:33']);
@@ -545,17 +527,22 @@ test('the caption input starts at the program\'s own video, not the main channel
         videoFrames: [[0, 5.5, '1440,1080,4:3', 0], [5.5, 1e9, '720,480,32:27', 30]],
         audioPackets: [[0, 5.5], [5.5, 1e9]],
         subtitleStreams: [3, 33],
-        pmtStreams: [11, 30, 33],
     });
     assert.strictEqual(status, 0);
     const nullOutput = args.slice(args.lastIndexOf('-f') - 4, args.lastIndexOf('-f'));
     assert.deepStrictEqual(nullOutput, ['-map', '1:30', '-c', 'copy']);
 });
 
-test('encodes every caption stream when the PMT lists none', () => {
-    const { status, args } = ffmpegArgsOf('cpu', { subtitleStreams: [3], pmtStreams: [0, 1] });
+test('encodes every caption stream of a recording without a lead-in on other streams', () => {
+    const { status, args } = ffmpegArgsOf('cpu', { subtitleStreams: [3, 4] });
     assert.strictEqual(status, 0);
-    assert.deepStrictEqual(args.slice(args.indexOf('-c:s') - 2, args.indexOf('-c:s')), ['-map', '1:s?']);
+    assert.deepStrictEqual(args.slice(args.indexOf('-c:s') - 4, args.indexOf('-c:s')), ['-map', '1:3', '-map', '1:4']);
+});
+
+test('encodes every caption stream when the program\'s video is not found 60 s in', () => {
+    const { status, args } = ffmpegArgsOf('cpu', { videoFrames: [[0, 1e9, '1440,1080,N/A', 5]], subtitleStreams: [3, 33] });
+    assert.strictEqual(status, 0);
+    assert.deepStrictEqual(args.slice(args.indexOf('-c:s') - 4, args.indexOf('-c:s')), ['-map', '1:3', '-map', '1:33']);
 });
 
 test('encodes a recording without a caption stream (CS channels), where the caption probe fails', () => {
