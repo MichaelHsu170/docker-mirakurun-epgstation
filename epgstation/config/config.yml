@@ -35,13 +35,13 @@ recorded:
 thumbnail: '%ROOT%/thumbnail'
 thumbnailSize: 480x270
 # 録画の先頭には前の番組が入る (実測 5-19 秒、低ビットレートでは最大約 53 秒: scripts/lib/audioTrackPlan.js の
-# DUAL_MONO_JUDGE_START) ため、番組の中の 60 秒目を使う。61 秒 (位置の 1 秒後) より短い録画にはサムネイルが
-# 作られない (thumbnail.js が失敗し、system.log に create thumbnail cmd error が出る。既定のコマンドは録画の終わりが
-# 最後の I フレームの途中だと、崩れたそのフレームを書いて 0 で終わる)
+# DUAL_MONO_JUDGE_START) ため、番組の中の 60 秒目を使う。61 秒 (位置の 1 秒後) より短い録画は真ん中から取る
+# (既定のコマンドは録画の終わりが最後の I フレームの途中だと、崩れたそのフレームを書いて 0 で終わる)。2 秒より短い
+# 録画にはサムネイルが作られない (thumbnail.js が失敗し、system.log に create thumbnail cmd error が出る)
 thumbnailPosition: 60
 # サブチャンネル (NHK BS 102、BS日テレ 142 など) の自分の番組の録画は先頭がメインチャンネルの映像 (別の PID) で、
 # 既定のコマンドはその映像を選んで 60 秒目のフレームがなく失敗するため、番組の映像 (enc.js と同じく 60 秒目に
-# フレームのある映像) から取る。それ以外の録画では既定のコマンド
+# フレームのある映像。短い録画では真ん中から) から取る。それ以外の 61 秒以上の録画では既定のコマンド
 # (%FFMPEG% -ss %THUMBNAIL_POSITION% -y -i %INPUT% -vframes 1 -f image2 -s %THUMBNAIL_SIZE% %OUTPUT%) と同じ画像になる。
 # 9 分で終わらなければ thumbnail.js が ffprobe/ffmpeg を止めて失敗する (EPGStation の 10 分のタイムアウトは
 # thumbnail.js だけを止め、ffmpeg は残る)

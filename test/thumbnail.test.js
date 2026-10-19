@@ -38,7 +38,8 @@ const configValue = key => {
  * - when the selected stream has no frame at the position otherwise, it writes nothing and exits 234 (review D21-1's
  *   1-h 142 recording; on a 3-min 142 capture ffmpeg instead wrote the lead-in's last frame, half-decoded, and exited
  *   0: either way not the program's picture).
- * The output holds the index of the stream the picture is from.
+ * The output holds the index of the stream the picture is from and the -ss position, or "cut-off" for the cut-off last
+ * frame past the end.
  */
 const thumbnailFfmpeg = videoFrames => {
     const parts = videoFrames.map(([from, to, size, index = 0]) => `${index} ${from} ${to} ${size.split(',').slice(0, 2).join(' ')}`).join('\\n');
@@ -50,8 +51,8 @@ const thumbnailFfmpeg = videoFrames => {
         'END { for (i in first) found[i] = (ps != "" || first[i] < 2); ' +
         '  if (map != "") { if (!(map in found) || !found[map]) exit 234; sel = map } ' +
         '  else { sel = ""; for (i in found) if (found[i] && (sel == "" || area[i] > area[sel] || (area[i] == area[sel] && i + 0 < sel + 0))) sel = i } ' +
-        '  end = 0; for (k = 1; k <= n; k++) { if (e[k] > end) end = e[k]; if (f[k] == sel && s[k] <= ss && ss < e[k]) { print sel; exit 0 } } ' +
-        '  if (ss >= end) { print sel; exit 0 } ' +
+        '  end = 0; for (k = 1; k <= n; k++) { if (e[k] > end) end = e[k]; if (f[k] == sel && s[k] <= ss && ss < e[k]) { print sel, ss; exit 0 } } ' +
+        '  if (ss >= end) { print sel, "cut-off"; exit 0 } ' +
         "  exit 234 }') || exit $?\n" +
         'printf "%s" "$stream" > "$out"'
     );
@@ -62,7 +63,8 @@ const thumbnailFfmpeg = videoFrames => {
  * command, then %NODE% and %ROOT% (ProcessUtil.parseCmdStr) and the other placeholders in each argument) with
  * config.yml's thumbnailPosition and thumbnailSize, on a recording whose video is videoFrames, with the fakes of
  * fakeTools.js (other options in tools; the recording's duration is their inputDuration, 100 s by default). Returns
- * the exit status and the index of the stream the thumbnail is from (null when none was written). With slowClock,
+ * the exit status, the index of the stream the thumbnail is from (null when none was written) and its position in the
+ * recording (the -ss position, or 'cut-off' for the cut-off last frame past the end). With slowClock,
  * node runs every timer of the script 1000 times sooner (thumbnail.js's 9-min limit in 0.54 s), the fake ffprobe and
  * ffmpeg write their process IDs to the files ffprobe.pid and ffmpeg.pid, and also returned are the IDs of those
  * still running when the script has exited.
@@ -100,7 +102,8 @@ const runThumbnail = (videoFrames, tools = {}, ffmpegScript = thumbnailFfmpeg(vi
             ),
             { env },
         );
-        const thumbnail = { status: result.status, stream: fs.existsSync(output) ? Number(fs.readFileSync(output, 'utf8')) : null };
+        const [stream, at] = fs.existsSync(output) ? fs.readFileSync(output, 'utf8').split(' ') : [null, null];
+        const thumbnail = { status: result.status, stream: stream === null ? null : Number(stream), at };
         if (!slowClock) {
             return thumbnail;
         }
@@ -120,28 +123,52 @@ const runThumbnail = (videoFrames, tools = {}, ffmpegScript = thumbnailFfmpeg(vi
 };
 
 test('the thumbnail of a recording is taken from its video', () => {
-    assert.deepStrictEqual(runThumbnail([[0, 1e9, '1440,1080,4:3', 1]]), { status: 0, stream: 1 });
-    assert.deepStrictEqual(runThumbnail([[0, 1e9, '720,480,32:27', 1]]), { status: 0, stream: 1 });
+    assert.deepStrictEqual(runThumbnail([[0, 1e9, '1440,1080,4:3', 1]]), { status: 0, stream: 1, at: '60' });
+    assert.deepStrictEqual(runThumbnail([[0, 1e9, '720,480,32:27', 1]]), { status: 0, stream: 1, at: '60' });
 });
 
 test("a sub-channel program's recording gets its thumbnail from the program's own video, not the main channel's lead-in", () => {
     // review D21-1: BS日テレ 142's own SD program after a simulcast on 141's HD PIDs (lead-in 5 s); Mirakurun stops
     // the main channel's PIDs at the switch
-    assert.deepStrictEqual(runThumbnail([[0, 5, '1440,1080,4:3', 0], [5, 1e9, '720,480,32:27', 9]]), { status: 0, stream: 9 });
+    assert.deepStrictEqual(runThumbnail([[0, 5, '1440,1080,4:3', 0], [5, 1e9, '720,480,32:27', 9]]), { status: 0, stream: 9, at: '60' });
     // the same picture size on both (NHK BS 102 in HD): the default selection takes the lower index, the lead-in's
-    assert.deepStrictEqual(runThumbnail([[0, 5, '1440,1080,4:3', 0], [5, 1e9, '1440,1080,4:3', 9]]), { status: 0, stream: 9 });
+    assert.deepStrictEqual(runThumbnail([[0, 5, '1440,1080,4:3', 0], [5, 1e9, '1440,1080,4:3', 9]]), { status: 0, stream: 9, at: '60' });
 });
 
-test('a recording shorter than the thumbnail position gets no thumbnail, not a garbled last frame', () => {
-    // review S22-2: a 42-s recording got its last, cut-off I-frame as its thumbnail
-    const short = runThumbnail([[0, 30, '1440,1080,4:3', 1]], { inputDuration: '30' });
-    assert.notStrictEqual(short.status, 0);
-    assert.strictEqual(short.stream, null);
-    // less than 1 s after the position (60 s): the frame there may be the cut-off one
-    const atTheEnd = runThumbnail([[0, 60.5, '1440,1080,4:3', 1]], { inputDuration: '60.5' });
-    assert.notStrictEqual(atTheEnd.status, 0);
-    assert.strictEqual(atTheEnd.stream, null);
-    assert.deepStrictEqual(runThumbnail([[0, 61, '1440,1080,4:3', 1]], { inputDuration: '61' }), { status: 0, stream: 1 });
+test('a recording shorter than the thumbnail position + 1 s gets its thumbnail from its middle, not a garbled last frame', () => {
+    // review S22-2: at the position (60 s) a 42-s recording got its last, cut-off I-frame; the owner chose the middle
+    // frame for these (a frame 1 s or more before the end is whole: real GR, BS and CS cuts of 2-60.5 s)
+    assert.deepStrictEqual(runThumbnail([[0, 30, '1440,1080,4:3', 1]], { inputDuration: '30' }), { status: 0, stream: 1, at: '15' });
+    assert.deepStrictEqual(runThumbnail([[0, 60.5, '1440,1080,4:3', 1]], { inputDuration: '60.5' }), { status: 0, stream: 1, at: '30.25' });
+    assert.deepStrictEqual(runThumbnail([[0, 61, '1440,1080,4:3', 1]], { inputDuration: '61' }), { status: 0, stream: 1, at: '60' });
+    // the shortest with a middle 1 s before the end
+    assert.deepStrictEqual(runThumbnail([[0, 2, '1440,1080,4:3', 1]], { inputDuration: '2' }), { status: 0, stream: 1, at: '1' });
+    const tooShort = runThumbnail([[0, 1.9, '1440,1080,4:3', 1]], { inputDuration: '1.9' });
+    assert.notStrictEqual(tooShort.status, 0);
+    assert.strictEqual(tooShort.stream, null);
+});
+
+test("a short sub-channel recording gets the program's own picture when its middle is past the lead-in, the main channel's when it is all lead-in", () => {
+    // the main channel's HD lead-in on stream 0 until the switch, then the program's own SD video on stream 9;
+    // ffprobe's programs may still list the lead-in's video (review D22-2: BS日テレ 142)
+    assert.deepStrictEqual(runThumbnail([[0, 12, '1440,1080,4:3', 0], [12, 40, '720,480,32:27', 9]], { inputDuration: '40' }), {
+        status: 0,
+        stream: 9,
+        at: '20',
+    });
+    // a lead-in under 5 s: the last 5 s of the recording still hold the lead-in's video, which has no frame at the middle
+    assert.deepStrictEqual(runThumbnail([[0, 4, '1440,1080,4:3', 0], [4, 8.5, '720,480,32:27', 9]], { inputDuration: '8.5' }), {
+        status: 0,
+        stream: 9,
+        at: '4.25',
+    });
+    // no program video yet: the main channel's picture, as any recording whose middle is in its lead-in
+    assert.deepStrictEqual(runThumbnail([[0, 8, '1440,1080,4:3', 0]], { inputDuration: '8' }), { status: 0, stream: 0, at: '4' });
+});
+
+test('a recording of unknown duration gets its thumbnail at the position', () => {
+    // review D23-1: a sub-channel recording whose broadcast clock wrapped after the switch has no duration
+    assert.deepStrictEqual(runThumbnail([[0, 1e9, '1440,1080,4:3', 1]], { inputDuration: 'N/A' }), { status: 0, stream: 1, at: '60' });
 });
 
 test('a thumbnail whose ffmpeg does not finish is stopped with its ffmpeg before EPGStation kills the script', () => {
@@ -166,9 +193,9 @@ test('a thumbnail whose ffprobe does not finish is stopped with its ffprobe, and
 
 test("without the program's video 60 s in, the thumbnail is taken as EPGStation's default command takes it", () => {
     // no frame whose SAR is known in the 60 s window (programVideoSize finds nothing), and a failed probe
-    assert.deepStrictEqual(runThumbnail([[0, 1e9, '1440,1080,N/A', 1]]), { status: 0, stream: 1 });
+    assert.deepStrictEqual(runThumbnail([[0, 1e9, '1440,1080,N/A', 1]]), { status: 0, stream: 1, at: '60' });
     const frames = [[0, 1e9, '1440,1080,4:3', 1]];
-    assert.deepStrictEqual(runThumbnail('fail', {}, thumbnailFfmpeg(frames)), { status: 0, stream: 1 });
+    assert.deepStrictEqual(runThumbnail('fail', {}, thumbnailFfmpeg(frames)), { status: 0, stream: 1, at: '60' });
 });
 
 test('the exit status is non-zero when ffmpeg fails or is killed, so EPGStation registers no thumbnail', () => {

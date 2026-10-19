@@ -122,13 +122,13 @@ function pmtStreamIndexes(result) {
  * @param {string[]} inputArgs 入力オプション
  * @param {number} inputDuration 入力の長さ (秒)
  * @param {AbortSignal} [signal] abort されると ffprobe を SIGKILL で止める (Promise は reject される)
+ * @param {number} [judgeStart] 判定区間の始まり (秒)。既定は programJudgeStart(inputDuration)
  * @return {Promise<{width: number, height: number, sar: string, streams: number[], leadInSeconds: number}|null>}
  *   sar は "4/3" の形。streams は入力内のストリーム番号 (小さい順)。leadInSeconds は最初の映像の始まりから番組の映像の
  *   始まりまでの秒数 (前の番組の映像が別のストリームの録画で、その部分はエンコードされない。それ以外は 0)。
  *   判定区間に SAR の分かるフレームがなければ null
  */
-function programVideoSize(ffprobePath, inputPath, inputArgs, inputDuration, signal) {
-    const judgeStart = programJudgeStart(inputDuration);
+function programVideoSize(ffprobePath, inputPath, inputArgs, inputDuration, signal, judgeStart = programJudgeStart(inputDuration)) {
     return new Promise((resolve, reject) => {
         execFile(
             ffprobePath,
