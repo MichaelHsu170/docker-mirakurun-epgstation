@@ -5,7 +5,7 @@ const { execFile, spawn } = require('child_process');
 // 放送局の遅れ。実測で NHK BS 5.3 秒、ヒストリーチャンネル 19.2 秒) ため、先頭で判定すると前の番組の音声で決まる
 // (ステレオの後の二カ国語番組が主音声だけになり、二カ国語の後のステレオ番組が左右に分かれる)。60 秒は 8 MiB が 1.5 Mbps でも
 // 45 秒、それに遅れの実測の最大 8.6 秒を足しても収まる。それより短い録画は末尾の DUAL_MONO_DECODE_SECONDS 秒で判定する。
-// 長さの分からない入力 (ストリームの判定ウィンドウ) は先頭から判定する。番組の映像の大きさ (programVideoSize) も同じ区間で判定する。
+// ストリームの判定ウィンドウ (長さ 0) は先頭から、長さの分からない録画 (NaN) は長い録画と同じく 60 秒目から判定する。番組の映像の大きさ (programVideoSize) も同じ区間で判定する。
 // 音声ストリームが2以上の録画は、同じ区間にパケットのあるストリームを番組の音声とする (前の番組の2本目の音声は
 // 前の番組の部分にしかなく、map すると番組の間は空のトラックになり、ffmpeg 9 はそれを待って入力をメモリに溜め続ける)。
 // 映像も同じ区間にフレームのあるストリームを番組の映像とする。どちらも ffprobe の programs (pmtStreamIndexes) にない
@@ -340,7 +340,7 @@ async function checkDualMono(ffmpegPath, inputPath, inputArgs, judgeStart, track
  * @param {string} inputPath
  * @param {'main'|'sub'} mode
  * @param {string[]} inputArgs 入力オプション
- * @param {number} judgeStart デコードを始める位置 (秒。0 以下か NaN なら先頭)
+ * @param {number} judgeStart デコードを始める位置 (秒。0 以下なら先頭)
  * @param {number} track デコードする音声 (0:a:N の N)
  * @return {Promise<Buffer>} judgeStart 秒目から DUAL_MONO_DECODE_SECONDS 秒の PCM (s16le)
  */

@@ -561,6 +561,14 @@ test('encodes every caption stream when the program\'s video is not found 60 s i
     assert.deepStrictEqual(args.slice(args.indexOf('-c:s') - 4, args.indexOf('-c:s')), ['-map', '1:3', '-map', '1:33']);
 });
 
+test('checks the audio length of an encode whose input duration is unknown', () => {
+    // a sub-channel recording whose broadcast clock wrapped: no input duration, and the first audio track is the
+    // previous program's 14 s (review D24-1); the audio check needs only the output
+    const tools = { audioStreams: 1, inputDuration: 'N/A', outputDuration: '173.206' };
+    assert.strictEqual(runEnc('exit 0', { ...tools, outputAudioDuration: '00:00:14.271000000' }), 1);
+    assert.strictEqual(runEnc('exit 0', { ...tools, outputAudioDuration: '00:02:52.927000000' }), 0);
+});
+
 test('encodes a recording without a caption stream (CS channels)', () => {
     const { status, args } = ffmpegArgsOf('cpu', { subtitleStreams: [] });
     assert.strictEqual(status, 0);

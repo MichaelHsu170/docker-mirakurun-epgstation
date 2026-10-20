@@ -286,28 +286,30 @@ const getAudioDuration = filePath => {
         // MAX_MISSING_SECONDS 秒を超えて短ければ失敗として返す。ただし ffmpeg がタイムスタンプの飛びを
         // 詰めた時間 (DISCONTINUITY_REG) は入力にデータがなく失われないため、その分も短くてよい。
         // 番組の映像の前の、別のストリームにしかない前の番組の部分 (programVideoSize の leadInSeconds) はエンコードしない
-        // ため、その分も短くてよい。入力の長さが分からない場合は判定しない (音声の長さも)
-        if (!Number.isFinite(duration) || duration <= 0) {
+        // ため、その分も短くてよい。入力の長さが分からない場合はこの判定はしない (音声の長さは出力だけで判定する)
+        const isDurationKnown = Number.isFinite(duration) && duration > 0;
+        if (!isDurationKnown) {
             console.error(`enc.js: input duration is unknown (${duration}): not checking the output duration`);
-            return;
         }
         try {
             const outputDuration = await getDuration(ffprobe, output);
-            const closedSeconds = Math.max(0, -discontinuityOffset / 1e6);
-            const leadInSeconds = videoSize === null ? 0 : videoSize.leadInSeconds;
-            const programDuration = duration - leadInSeconds;
-            const inputText = `input is ${duration}s${leadInSeconds > 0 ? ` (${leadInSeconds}s of it before the program's own video, not encoded)` : ''}`;
-            if (!(outputDuration >= programDuration - MAX_MISSING_SECONDS - closedSeconds)) {
-                console.error(
-                    `enc.js: output is ${outputDuration}s, ${inputText}, of which ffmpeg closed up ${closedSeconds}s of timestamp gaps: treating the encode as failed`,
-                );
-                process.exitCode = 1;
-                return;
-            }
-            if (!(outputDuration >= programDuration - MAX_MISSING_SECONDS)) {
-                console.error(
-                    `enc.js: output is ${outputDuration}s, ${inputText}: ffmpeg closed up ${closedSeconds}s of timestamp gaps (no data in the input), so the output is complete`,
-                );
+            if (isDurationKnown) {
+                const closedSeconds = Math.max(0, -discontinuityOffset / 1e6);
+                const leadInSeconds = videoSize === null ? 0 : videoSize.leadInSeconds;
+                const programDuration = duration - leadInSeconds;
+                const inputText = `input is ${duration}s${leadInSeconds > 0 ? ` (${leadInSeconds}s of it before the program's own video, not encoded)` : ''}`;
+                if (!(outputDuration >= programDuration - MAX_MISSING_SECONDS - closedSeconds)) {
+                    console.error(
+                        `enc.js: output is ${outputDuration}s, ${inputText}, of which ffmpeg closed up ${closedSeconds}s of timestamp gaps: treating the encode as failed`,
+                    );
+                    process.exitCode = 1;
+                    return;
+                }
+                if (!(outputDuration >= programDuration - MAX_MISSING_SECONDS)) {
+                    console.error(
+                        `enc.js: output is ${outputDuration}s, ${inputText}: ffmpeg closed up ${closedSeconds}s of timestamp gaps (no data in the input), so the output is complete`,
+                    );
+                }
             }
             // 音声が途中で途切れた出力も成功扱いにすると元ファイルが削除されて音声が失われる
             if (plan.trackCount > 0) {
