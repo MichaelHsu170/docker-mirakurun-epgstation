@@ -289,7 +289,7 @@ const getAudioDuration = filePath => {
         // ため、その分も短くてよい。入力の長さが分からない場合はこの判定はしない (音声の長さは出力だけで判定する)
         const isDurationKnown = Number.isFinite(duration) && duration > 0;
         if (!isDurationKnown) {
-            console.error(`enc.js: input duration is unknown (${duration}): not checking the output duration`);
+            console.error(`enc.js: input duration is unknown (${duration}): not comparing the output duration with it`);
         }
         try {
             const outputDuration = await getDuration(ffprobe, output);

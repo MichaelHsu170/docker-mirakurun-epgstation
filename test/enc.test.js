@@ -120,7 +120,7 @@ test('fails a truncated output despite closed-up gaps, naming the closed-up time
     );
 });
 
-test('does not check the output when the input duration cannot be read', () => {
+test('does not compare the output with the input when the input duration cannot be read', () => {
     assert.strictEqual(runEnc('exit 0', { inputDuration: 'N/A', outputDuration: '10' }), 0);
     assert.strictEqual(runEnc('exit 0', { inputDuration: '0', outputDuration: '10' }), 0);
 });
