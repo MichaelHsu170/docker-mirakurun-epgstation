@@ -1,6 +1,6 @@
 const spawn = require('child_process').spawn;
 const execFile = require('child_process').execFile;
-const { audioTrackPlan, getDuration, programVideoSize, programSubtitleStreams, PROBE_ARGS } = require('./lib/audioTrackPlan.js');
+const { audioTrackPlan, getDuration, lateAudioStreams, programVideoSize, programSubtitleStreams, PROBE_ARGS } = require('./lib/audioTrackPlan.js');
 const ffmpeg = process.env.FFMPEG;
 const ffprobe = process.env.FFPROBE;
 
@@ -69,6 +69,16 @@ const getAudioDuration = filePath => {
 (async () => {
     // 進捗計算のために動画の長さを取得
     const duration = await getDuration(ffprobe, input, PROBE_ARGS);
+    // 番組の音声に、ストリーム検出 (先頭 30 秒分) の後に始まるものがあると ffmpeg はそれをエンコードしないまま 0 で終わる
+    // (唯一の音声なら無音の出力)。成功扱いにすると元ファイルが削除されて音声が失われるため失敗として返す
+    const lateAudio = await lateAudioStreams(ffprobe, input, PROBE_ARGS, duration);
+    if (lateAudio.length > 0) {
+        console.error(
+            `enc.js: the program's audio stream(s) ${lateAudio.join(', ')} (PID) start after the first 30 s of the recording that ffmpeg probes for streams, so ffmpeg would leave them out: treating the encode as failed`,
+        );
+        process.exitCode = 1;
+        return;
+    }
     // 音声ストリーム構成 (実ストリーム数・二カ国語判定) を実際にデコードして判定する。
     // EPG由来のメタデータ (AUDIOCOMPONENTTYPE) は誤りや欠落があり得るため信頼しない。
     // 二カ国語と map する音声ストリームは先頭 (前の番組の音声が入る) ではなく番組の中の音声で判定する

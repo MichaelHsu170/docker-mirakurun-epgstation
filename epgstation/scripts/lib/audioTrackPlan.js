@@ -19,7 +19,8 @@ const DUAL_MONO_DECODE_SECONDS = 5;
 // 音声 (副音声など) が見つからず、srcs/ffmpeg ではそのストリームが破棄されて出力から黙って欠ける
 // (映像も: サブチャンネルの録画の、番組の始めに移る自分の PID の映像は map できない)。
 // 入力はシーク可能な録画ファイルなので先頭 30 秒分まで探す (200 MB は BS の最大ビットレート
-// 約 24 Mbps でも 60 秒分以上あり、30 秒より先に打ち切られない)
+// 約 24 Mbps でも 60 秒分以上あり、30 秒より先に打ち切られない)。それより後に始まる番組の音声は見つからないため、
+// enc.js はそのエンコードを失敗にする (lateAudioStreams)
 const PROBE_ARGS = ['-analyzeduration', '30M', '-probesize', '200M'];
 
 /**
@@ -257,10 +258,22 @@ async function getAudioStreamCount(ffprobePath, inputPath, inputArgs = []) {
  * @return {Promise<number[]>} 音声ストリームの入力内のストリーム番号 (0:a:N の順)
  */
 function getAudioStreamIndexes(ffprobePath, inputPath, inputArgs) {
+    return getAudioStreamEntries(ffprobePath, inputPath, inputArgs, 'index');
+}
+
+/**
+ * ffprobe が音声と判定したストリーム (-select_streams a) の entry の値
+ * @param {string} ffprobePath
+ * @param {string} inputPath
+ * @param {string[]} inputArgs 入力オプション
+ * @param {'index'|'id'} entry ストリーム番号か PID ("0x111" の形)
+ * @return {Promise<Array<number|string>>} 0:a:N の順
+ */
+function getAudioStreamEntries(ffprobePath, inputPath, inputArgs, entry) {
     return new Promise((resolve, reject) => {
         execFile(
             ffprobePath,
-            ['-v', 'error', ...inputArgs, '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'json', inputPath],
+            ['-v', 'error', ...inputArgs, '-select_streams', 'a', '-show_entries', `stream=${entry}`, '-of', 'json', inputPath],
             (err, stdout) => {
                 if (err) {
                     reject(err);
@@ -268,7 +281,70 @@ function getAudioStreamIndexes(ffprobePath, inputPath, inputArgs) {
                 }
                 try {
                     const result = JSON.parse(stdout);
-                    resolve((result.streams || []).map(stream => stream.index));
+                    resolve((result.streams || []).map(stream => stream[entry]));
+                } catch (e) {
+                    reject(e);
+                }
+            },
+        );
+    });
+}
+
+/**
+ * 番組の音声 (録画の programJudgeStart 秒目の PMT にある音声) のうち、録画の先頭からのストリーム検出 (inputArgs) では
+ * 音声と分からないもの。ffmpeg と ffprobe は検出の範囲 (PROBE_ARGS: 先頭 30 秒分) で最初のパケットを読めなかった音声の
+ * コーデックを知らず (codec_type unknown、codec_tag 0x0f)、その範囲の後に PMT に加わったストリームはまったく扱わないため、
+ * ffmpeg はその音声をエンコードせず 0 で終わる (review D20-1: 番組の唯一の音声なら無音の出力になる)。
+ * 判定区間の映像のパケットのバイト位置 (区間の最後のもの。ffprobe は区間の始めに前の部分の古いパケットを出すことがある: review D22-2 の音声) から
+ * 入力を開き直して (-skip_initial_bytes) そこで音声と分かるストリームを番組の音声とし、PID で比べる。データ放送などの
+ * 音声でないストリームは対象外。判定区間に映像のパケットがなければ判定しない (空)
+ * @param {string} ffprobePath
+ * @param {string} inputPath
+ * @param {string[]} inputArgs 入力オプション
+ * @param {number} inputDuration 入力の長さ (秒)
+ * @return {Promise<string[]>} PID ("0x111" の形)
+ */
+async function lateAudioStreams(ffprobePath, inputPath, inputArgs, inputDuration) {
+    const position = await programPosition(ffprobePath, inputPath, inputArgs, programJudgeStart(inputDuration));
+    if (position === null) {
+        return [];
+    }
+    const found = await getAudioStreamEntries(ffprobePath, inputPath, inputArgs, 'id');
+    const program = await getAudioStreamEntries(ffprobePath, inputPath, [...inputArgs, '-skip_initial_bytes', String(position)], 'id');
+
+    return program.filter(id => !found.includes(id));
+}
+
+/**
+ * judgeStart 秒目から DUAL_MONO_DECODE_SECONDS 秒の間の映像のパケットの最後のもののバイト位置 (judgeStart が 0 以下なら
+ * 先頭から: ffprobe は +-2% を +0% と同じに読む)
+ * @param {string} ffprobePath
+ * @param {string} inputPath
+ * @param {string[]} inputArgs 入力オプション
+ * @param {number} judgeStart 位置 (秒)
+ * @return {Promise<number|null>} パケットがなければ null
+ */
+function programPosition(ffprobePath, inputPath, inputArgs, judgeStart) {
+    return new Promise((resolve, reject) => {
+        execFile(
+            ffprobePath,
+            [
+                '-v', 'error',
+                ...inputArgs,
+                '-read_intervals', `+${judgeStart}%+${DUAL_MONO_DECODE_SECONDS}`,
+                '-select_streams', 'v',
+                '-show_entries', 'packet=pos',
+                '-of', 'json',
+                inputPath,
+            ],
+            (err, stdout) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+                try {
+                    const positions = (JSON.parse(stdout).packets || []).map(packet => parseInt(packet.pos, 10)).filter(Number.isFinite);
+                    resolve(positions.length === 0 ? null : Math.max(...positions));
                 } catch (e) {
                     reject(e);
                 }
@@ -372,4 +448,4 @@ function decodeAudio(ffmpegPath, inputPath, mode, inputArgs, judgeStart, track) 
     });
 }
 
-module.exports = { audioTrackPlan, getAudioStreamCount, getDuration, programVideoSize, programSubtitleStreams, PROBE_ARGS };
+module.exports = { audioTrackPlan, getAudioStreamCount, getDuration, lateAudioStreams, programVideoSize, programSubtitleStreams, PROBE_ARGS };

@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { writeFakeTools } = require('./fakeTools.js');
-const { audioTrackPlan } = require('../epgstation/scripts/lib/audioTrackPlan.js');
+const { audioTrackPlan, lateAudioStreams } = require('../epgstation/scripts/lib/audioTrackPlan.js');
 
 /** Runs audioTrackPlan with the fakes of fakeTools.js (the options in tools) and the given arguments. */
 const plan = async (t, tools, inputArgs, firstTrackOnly, inputDuration) => {
@@ -288,4 +288,46 @@ test('puts the input options before the input in the probe for the program\'s au
 
 test('rejects when ffprobe fails', async t => {
     await assert.rejects(plan(t, { audioStreams: 1, inputDuration: 'fail' }));
+});
+
+/** Runs lateAudioStreams with the fakes of fakeTools.js (the options in tools), PROBE_ARGS-like input options and the duration */
+const lateAudio = async (t, tools, inputDuration = 300) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audio-track-plan-test-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const { ffprobe } = writeFakeTools(dir, tools);
+
+    return lateAudioStreams(ffprobe, path.join(dir, 'in.m2ts'), ['-analyzeduration', '30M', '-probesize', '200M'], inputDuration);
+};
+
+// review D20-1: an audio stream whose first packet comes after the 30 s stream probe (History, the audio removed from the
+// first 33 s), or that a PMT adds 40 s in (Disney Junior's 2nd audio), is not found as audio from the start
+test('finds the program\'s audio streams that start after the 30 s stream probe', async t => {
+    assert.deepStrictEqual(await lateAudio(t, { audioStreams: 1, audioPackets: [[33, 1e9]] }), ['0x110']);
+    assert.deepStrictEqual(await lateAudio(t, { audioStreams: 2, audioPackets: [[0, 1e9], [45, 1e9]] }), ['0x111']);
+    assert.deepStrictEqual(await lateAudio(t, { audioStreams: 3, audioPackets: [[40, 1e9], [0, 1e9], [50, 1e9]] }), ['0x110', '0x112']);
+    // judged at the end of a recording shorter than 65 s, and 60 s into one of unknown duration
+    assert.deepStrictEqual(await lateAudio(t, { audioStreams: 1, audioPackets: [[33, 1e9]] }, 40), ['0x110']);
+    assert.deepStrictEqual(await lateAudio(t, { audioStreams: 1, audioPackets: [[33, 1e9]] }, NaN), ['0x110']);
+});
+
+test('finds no late audio when every audio stream of the program starts within the 30 s stream probe', async t => {
+    assert.deepStrictEqual(await lateAudio(t, { audioStreams: 1 }), []);
+    // a 2nd audio stream new at the program's start, 6 s in (NHK G, Eテレ, NHK BS: review D20-1)
+    assert.deepStrictEqual(await lateAudio(t, { audioStreams: 2, audioPackets: [[0, 1e9], [6, 1e9]] }), []);
+    // a 2nd audio stream of the previous program only in the lead-in, and a sub-channel's own audio after its lead-in
+    assert.deepStrictEqual(await lateAudio(t, { audioStreams: 2, audioPackets: [[0, 1e9], [0, 5.16]] }), []);
+    assert.deepStrictEqual(await lateAudio(t, { audioStreams: 2, audioPackets: [[0, 12], [12, 1e9]] }), []);
+    assert.deepStrictEqual(await lateAudio(t, { audioStreams: 0 }), []);
+});
+
+test('does not count an audio stream that starts late but ends before the program 60 s in', async t => {
+    assert.deepStrictEqual(await lateAudio(t, { audioStreams: 2, audioPackets: [[0, 1e9], [35, 50]] }), []);
+});
+
+test('does not judge late audio without video packets 60 s in', async t => {
+    assert.deepStrictEqual(await lateAudio(t, { audioStreams: 1, audioPackets: [[33, 1e9]], videoFrames: [] }), []);
+});
+
+test('rejects when the probe for the audio streams found from the start fails', async t => {
+    await assert.rejects(lateAudio(t, { audioStreams: 1, audioPackets: [[33, 1e9]], inputDuration: 'fail' }));
 });

@@ -5,7 +5,8 @@ const path = require('path');
  * Writes a fake ffprobe and a fake ffmpeg into dir (ffprobe next to ffmpeg, where streamEncode.js looks
  * for it).
  * - ffprobe reports audioStreams audio streams, with the stream indexes 1, 11, 21, ... (audio streams are not
- *   numbered consecutively in a broadcast: 1 and 11 in review D13-1's NHK BS capture), and a duration of
+ *   numbered consecutively in a broadcast: 1 and 11 in review D13-1's NHK BS capture) and the PIDs (id) 0x110, 0x111,
+ *   0x112, ..., and a duration of
  *   outputDuration for a .mkv (enc.js's output) and inputDuration for any other file; a duration of 'fail' makes it
  *   fail. Without -probesize (the default probe, 5 MB) it reports defaultProbeDuration for the input instead, when
  *   given: 'N/A' for a recording with a stream that starts after the first 5 MB (review D18-1). For a .mkv its streams carry the DURATION tag outputAudioDuration, as the Matroska muxer writes it for each
@@ -16,7 +17,14 @@ const path = require('path');
  *   packet (3 here) for every audio stream with packets there, and under programs the audio streams of pmtStreams.
  *   audioPackets gives each audio stream's [from, to] seconds with packets (a
  *   2nd audio stream of the previous program only in the recording's lead-in: [0, 5]); without it every stream has
- *   packets throughout.
+ *   packets throughout. The input is BYTES_PER_SECOND bytes per second. As the real ffprobe with PROBE_ARGS (the
+ *   30 s stream probe), every -select_streams a call finds only the audio streams whose first packet is less than
+ *   30 s after where it opens the input: the start, or with -skip_initial_bytes <n>, n / BYTES_PER_SECOND s in, where
+ *   it finds only the streams with packets after that point (the PMT there). A stream whose packets start later is
+ *   not an audio stream for it (the real one reports it as codec_type unknown, codec_tag 0x0f, and a stream that a
+ *   later PMT adds not at all: review D20-1, checked on real captures with the audio removed from the first 33 s and
+ *   with a 2nd audio PID added to the PMT 40 s in). A -skip_initial_bytes value that is not a number fails, as with
+ *   the real ffprobe.
  *   With -select_streams v and -read_intervals it prints instead the video frames in that part of the input
  *   (frame=stream_index,width,height,sample_aspect_ratio:program_stream=index:stream=index,start_time, json) as the
  *   real ffprobe does: a frame (3 here per part) with its stream index, width, height and SAR (no SAR where it is
@@ -25,7 +33,8 @@ const path = require('path');
  *   start of the stream's first part). videoFrames gives the parts of the video as
  *   [from, to, '<width>,<height>,<sar>', <stream index, default 0>] (a lead-in of the previous program's size:
  *   [0, 15, '720,480,32:27']); the default is 1440x1080 SAR 4:3 throughout, [] no frame at all, and 'fail' makes
- *   that call fail. Without -probesize (the default 5 MB probe) it lists no frame of a video stream whose first part
+ *   that call fail. With -show_entries packet=pos it prints instead the byte positions of video packets in that part
+ *   ({"packets":[{"pos":"<n>"}, ...]}, as strings like the real ffprobe; none for 'fail'). Without -probesize (the default 5 MB probe) it lists no frame of a video stream whose first part
  *   starts 2 s or more into the input. What the real default probe misses is a stream that a later PMT adds: a
  *   sub-channel program's own video after the main channel's lead-in (BS日テレ 142: stream 9 from 4.8-5.6 s in;
  *   review D21-1, D22-2), which starts at the switch in a recording. A stream of the first PMT whose data starts late
@@ -51,6 +60,9 @@ const path = require('path');
  * - with callLog, both append a line "<ffprobe|ffmpeg> <arguments>" to that file for every call.
  * - with probedSizes, ffprobe appends the size in bytes of the file it probes to that file.
  */
+/** The bytes per second of the fake input (about a GR recording's 16 Mbps) */
+const BYTES_PER_SECOND = 2000000;
+
 const writeFakeTools = (
     dir,
     {
@@ -72,11 +84,16 @@ const writeFakeTools = (
 ) => {
     const logCall = name => (callLog ? `echo "${name} $*" >> '${callLog}'\n` : '');
     const indexes = Array.from({ length: audioStreams }, (_, i) => i * 10 + 1);
-    const streams = JSON.stringify(indexes.map(index => ({ index })));
+    const ids = indexes.map((_, i) => `0x${(0x110 + i).toString(16)}`);
+    const startOfAudio = i => (audioPackets ? audioPackets[i][0] : 0);
+    // the audio streams that the 30 s stream probe from the start of the input finds
+    const found = indexes.filter((_, i) => startOfAudio(i) < 30);
+    const streams = JSON.stringify(indexes.map((index, i) => ({ index, id: ids[i] })).filter(stream => found.includes(stream.index)));
     // @D@: the DURATION tag, filled in by ffprobe
     const mkvStreams = JSON.stringify(indexes.map(index => ({ index, tags: { DURATION: '@D@' } })));
     // "<index> <from> <to>" for every audio stream
-    const packets = indexes.map((index, i) => `${index} ${audioPackets ? audioPackets[i].join(' ') : '0 1e9'}`).join('\\n');
+    const audioLines = indexes.map((index, i) => `${index} ${audioPackets ? audioPackets[i].join(' ') : '0 1e9'} ${ids[i]}`);
+    const packets = audioLines.filter((_, i) => found.includes(indexes[i])).join('\\n');
     // "<stream index> <from> <to> <width>,<height>,<sar>" for every part of the video
     const videoParts = videoFrames === 'fail' ? [] : videoFrames.map(([from, to, size, index = 0]) => [index, from, to, size]);
     const frames = videoParts.map(part => part.join(' ')).join('\\n');
@@ -106,9 +123,14 @@ const writeFakeTools = (
     const ffprobe = path.join(dir, 'ffprobe');
     fs.writeFileSync(
         ffprobe,
-        `#!/bin/sh\n${logCall('ffprobe')}sleep ${probeSeconds}\nri=; sel=; ps=; prev=; for a; do [ "$prev" = -read_intervals ] && ri="$a"; ` +
-            '[ "$prev" = -select_streams ] && sel="$a"; [ "$a" = -probesize ] && ps=1; prev="$a"; last="$a"; done\n' +
+        `#!/bin/sh\n${logCall('ffprobe')}sleep ${probeSeconds}\nri=; sel=; ps=; se=; sk=; prev=; for a; do [ "$prev" = -read_intervals ] && ri="$a"; ` +
+            '[ "$prev" = -select_streams ] && sel="$a"; [ "$prev" = -show_entries ] && se="$a"; [ "$prev" = -skip_initial_bytes ] && sk="$a"; ' +
+            '[ "$a" = -probesize ] && ps=1; prev="$a"; last="$a"; done\n' +
             (probedSizes ? `stat -c %s "$last" >> '${probedSizes}'\n` : '') +
+            'if [ -n "$ri" ] && [ "$sel" = v ] && [ "$se" = packet=pos ]; then\n' +
+            `  printf '{"packets":[%s]}\\n' "$([ -n '${frames}' ] && printf '${frames}\\n' | ` +
+            `${inInterval(`"{\\"pos\\":\\"" int((($2 > s ? $2 : s) + k) * ${BYTES_PER_SECOND}) "\\"}"`)})"\n` +
+            '  exit 0\nfi\n' +
             'if [ -n "$ri" ] && [ "$sel" = v ]; then\n' +
             (videoFrames === 'fail'
                 ? '  exit 1\n'
@@ -116,12 +138,18 @@ const writeFakeTools = (
                   `  printf '{"frames":[%s],"programs":%s,"streams":%s}\\n' "$([ -n "$f" ] && printf "$f\\n" | ` +
                   `${inInterval(`(split($4, f, ",") ? ${frameItem} : "")`)})" '${pmt(videoIndexes)}' '${videoStreams}'\n`) +
             '  exit 0\nfi\n' +
+            'if [ -n "$sk" ]; then\n' +
+            // the real ffprobe fails on a value that is not a number ("Unable to parse \"skip_initial_bytes\" option value")
+            '  case "$sk" in *[!0-9]*) exit 1;; esac\n' +
+            `  printf '{"streams":[%s]}\\n' "$([ -n '${audioLines.join('\\n')}' ] && printf '${audioLines.join('\\n')}\\n' | ` +
+            `awk -v t="$sk" '{ t0 = t / ${BYTES_PER_SECOND}; if ($2 < t0 + 30 && $3 > t0) print "{\\"index\\":" $1 ",\\"id\\":\\"" $4 "\\"}" }' | paste -sd, -)"\n` +
+            '  exit 0\nfi\n' +
             'if [ "$sel" = s ]; then\n' +
             `  printf '%s\\n' '${JSON.stringify({ streams: subtitleStreams.map(index => ({ index })) })}'\n` +
             '  exit 0\nfi\n' +
             'if [ -n "$ri" ]; then\n' +
             `  printf '{"packets":[%s],"programs":%s}\\n' "$([ -n '${packets}' ] && printf '${packets}\\n' | ` +
-            `${inInterval('"{\\"stream_index\\":" $1 "}"')})" '${pmt(indexes)}'\n` +
+            `${inInterval('"{\\"stream_index\\":" $1 "}"')})" '${pmt(found)}'\n` +
             '  exit 0\nfi\n' +
             `case "$last" in *.mkv) d='${outputDuration}'; a='${outputAudioDuration}'; [ -s "$last" ] && a=$(cat "$last"); ` +
             `st=$(printf '%s' '${mkvStreams}' | sed "s/@D@/$a/g");; *) d='${inputDuration}'; [ -z "$ps" ] && d='${defaultProbeDuration}'; st='${streams}';; esac\n` +

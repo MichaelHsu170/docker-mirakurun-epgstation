@@ -266,11 +266,16 @@ test('probes 30 s of the input for streams in the stream count and the dual-mono
         assert.strictEqual(spawnSync(process.execPath, [encJs, 'cpu'], { env }).status, 0);
 
         const calls = fs.readFileSync(callLog, 'utf8').trimEnd().split('\n');
-        const probeCalls = calls.filter(c => c.includes('-select_streams a ') || c.includes('-v error -dual_mono_mode'));
+        const probeCalls = calls
+            .filter(c => c.includes('-select_streams a ') || c.includes('-v error -dual_mono_mode'))
+            .map(c => c.replace(/-skip_initial_bytes \d+/, '-skip_initial_bytes <position>'));
         assert.deepStrictEqual(probeCalls.sort(), [
             `ffmpeg -v error -dual_mono_mode main -analyzeduration 30M -probesize 200M -ss 60 -i ${env.INPUT} -map 0:a:0 -t 5 -f s16le -`,
             `ffmpeg -v error -dual_mono_mode sub -analyzeduration 30M -probesize 200M -ss 60 -i ${env.INPUT} -map 0:a:0 -t 5 -f s16le -`,
+            `ffprobe -v error -analyzeduration 30M -probesize 200M -select_streams a -show_entries stream=id -of json ${env.INPUT}`,
             `ffprobe -v error -analyzeduration 30M -probesize 200M -select_streams a -show_entries stream=index -of json ${env.INPUT}`,
+            // the program's audio streams, probed from a video packet 60-65 s in
+            `ffprobe -v error -analyzeduration 30M -probesize 200M -skip_initial_bytes <position> -select_streams a -show_entries stream=id -of json ${env.INPUT}`,
         ]);
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -405,6 +410,23 @@ const ffmpegArgsOf = (mode, tools) => {
         fs.rmSync(dir, { recursive: true, force: true });
     }
 };
+
+// review D20-1, on real captures: History with its only audio removed from the first 33 s, and Disney Junior with its
+// 2nd audio PID added to the PMT 40 s in. ffmpeg leaves such an audio stream out and exits 0 (a silent encode if it is
+// the only one), and EPGStation would then delete the TS
+test('fails without encoding when the program\'s only audio starts after the 30 s stream probe', () => {
+    assert.deepStrictEqual(ffmpegArgsOf('gpu', { audioStreams: 1, audioPackets: [[33, 1e9]] }), { status: 1, args: null });
+});
+
+test('fails without encoding when the program\'s 2nd audio starts after the 30 s stream probe', () => {
+    assert.deepStrictEqual(ffmpegArgsOf('gpu', { audioStreams: 2, audioPackets: [[0, 1e9], [45, 1e9]] }), { status: 1, args: null });
+});
+
+test('encodes both audio streams when the 2nd one starts with the program, 6 s in', () => {
+    const { status, args } = ffmpegArgsOf('cpu', { audioStreams: 2, audioPackets: [[0, 1e9], [6, 1e9]] });
+    assert.strictEqual(status, 0);
+    assert.deepStrictEqual(args.slice(args.indexOf('-vf') + 2, args.indexOf('-c:a')), ['-map', '0:a']);
+});
 
 /** Like ffmpegArgsOf, with the value of ffmpeg's -vf (null when ffmpeg did not run) instead of its arguments */
 const videoFilterOf = (mode, tools) => {
