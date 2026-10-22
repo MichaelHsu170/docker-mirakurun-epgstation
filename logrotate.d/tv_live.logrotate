@@ -8,13 +8,17 @@
 # "parent directory is group-writable" safety check, for consistency with the
 # other two projects' policies even where it isn't currently triggered here.
 su root root
+#
+# Retention: every log here is kept about half a year (maxage 190; rotate is only a ceiling high enough
+# that age decides, also for size-triggered rotations). The rule's owner is logrotate/entrypoint.sh.
 
 /app/logs/Service/*.log
 /app/logs/Operator/*.log
 /app/logs/EPGUpdater/*.log
 {
     daily
-    rotate 14
+    rotate 400
+    maxage 190
     compress
     delaycompress
     missingok

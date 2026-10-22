@@ -34,8 +34,10 @@ services:
     logging:
       driver: json-file
       options:
+        # about 1 MB a day: 20 files keep about half a year (logrotate/entrypoint.sh's retention rule);
+        # the log is lost when the container is recreated
         max-size: "10m"
-        max-file: "3"
+        max-file: "20"
     networks:
       - dlan
 
