@@ -11,9 +11,10 @@ services:
     cap_add:
       - SYS_ADMIN
       - SYS_NICE
+    # Only the API port: the debugger port 9229 (debug mode only) has no password and is reached through an SSH
+    # tunnel instead (tv_live/setup.txt)
     ports:
       - "40772:40772"
-      - "9229:9229"
     volumes:
       - ./mirakurun/conf:/app-config
       - ./mirakurun/data:/app-data
@@ -38,8 +39,11 @@ services:
         # the log is lost when the container is recreated
         max-size: "10m"
         max-file: "20"
+    # Only the TV network: the containers on docker-lan (the internet-facing website among them)
+    # cannot reach its API, which has no login and runs commands as root. Its published ports
+    # (above) still serve the LAN.
     networks:
-      - dlan
+      - tv
 
   mysql:
     # MariaDB LTS (12.3: supported until 2029). A new major version upgrades the data files on
@@ -63,8 +67,9 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    # Only EPGStation uses it: the TV network alone
     networks:
-      - dlan
+      - tv
 
   epgstation:
     image: mh/epgstation:${EPGSTATION_VERSION:?run launch.sh build first (no .env found)}
@@ -93,7 +98,6 @@ services:
       - mysql
     ports:
       - "8888:8888"
-      - "8889:8889"
     user: "1000:1000"
 #     devices:
 #       - /dev/dri:/dev/dri
@@ -102,7 +106,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    # The TV network for Mirakurun and MariaDB; docker-lan for the website (its EPG pages, EPGSTATION_URL)
+    # and Apache's tv site, which reach it as docker-mirakurun-epgstation-epgstation-1:8888
     networks:
+      - tv
       - dlan
 
   # Rotation/retention for EPGStation's Service/Operator/EPGUpdater logs - see
@@ -124,9 +131,23 @@ services:
         max-size: "10m"
         max-file: "3"
     networks:
-      - dlan
+      - tv
 
 networks:
   dlan:
     name: docker-lan
     external: true
+  # The TV stack's own network (MachineSetup/NETWORK.md). A plain bridge, not internal: Docker publishes no
+  # port of a container that is only on an internal network, and Mirakurun's 40772 is opened from the LAN.
+  tv:
+    name: tv-internal
+    driver_opts:
+      com.docker.network.bridge.name: br-tv-internal
+    # Containers get addresses from 172.19.1.0/24 only, apart from the gateway 172.19.0.1: Docker rewrites the source
+    # of a request reaching Mirakurun's published port from docker-lan (or from this host) to that gateway, so
+    # Mirakurun's allow-list (mirakurun/conf/server.yml, allowIPv4CidrRanges) admits EPGStation and refuses those.
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+          ip_range: 172.19.1.0/24
+          gateway: 172.19.0.1
